@@ -1,0 +1,46 @@
+{
+  "name": "share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bill-splitting web app (Splitwise/KittySplit style) on Cloudflare Workers + D1",
+  "scripts": {
+    "build": "vite build",
+    "dev": "npm run build && wrangler dev --port 8787",
+    "db:migrate:local": "wrangler d1 migrations apply share-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply share-db --remote",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
+    "test:security": "vitest run --config vitest.security.config.ts",
+    "test:e2e": "playwright test --project=chromium",
+    "test:compat": "playwright test",
+    "test:local": "bash scripts/test-local.sh",
+    "test:prod": "bash scripts/test-prod.sh",
+    "deploy": "npm run build && npm run db:migrate:remote && wrangler deploy",
+    "ship": "bash scripts/ship.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261022.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "dotenv": "^18.0.8",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.152.0"
+  },
+  "dependencies": {
+    "@material/web": "^2.5.0",
+    "hono": "^4.13.13",
+    "jose": "^6.2.13"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
+    "workerd@1.20260815.1": true,
+    "workerd@1.20261019.1": true
+  }
+}

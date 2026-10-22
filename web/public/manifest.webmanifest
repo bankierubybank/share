@@ -1,0 +1,9 @@
+{
+  "name": "Share — split bills",
+  "short_name": "Share",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4fbf8",
+  "theme_color": "#006a60",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
