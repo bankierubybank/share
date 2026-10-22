@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0 deploy — 2026-10-23
+
+### Deployed
+- First prod deploy to `https://share.bankierubybank.workers.dev`; created D1 `share-db`
+  (`fc72d57c-394e-4be1-b1b7-009f9c68fd4e`, APAC), id pinned in `wrangler.jsonc`; migration `0001_init` applied.
+- Prod gate passed through Cloudflare Access service token (system, security incl. Access-block check, E2E).
+
 ## 0.1.0 — 2026-10-22
 
 ### Added

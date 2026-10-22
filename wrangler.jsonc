@@ -16,6 +16,7 @@
     {
       "binding": "DB",
       "database_name": "share-db",
+      "database_id": "fc72d57c-394e-4be1-b1b7-009f9c68fd4e",
       "migrations_dir": "./migrations"
     }
   ],

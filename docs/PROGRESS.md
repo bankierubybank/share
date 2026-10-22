@@ -1,8 +1,8 @@
 # Progress
 
-_Last updated: 2026-10-22_
+_Last updated: 2026-10-23_
 
-## Status: v0.1.0 built + locally green; NOT yet deployed (blocked, see ISSUES #2)
+## Status: v0.1.0 live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
 
 | Area | State |
 |------|-------|
@@ -14,8 +14,10 @@ _Last updated: 2026-10-22_
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
 | Tests: unit 30, integration 25, system 20, security 48 (+1 prod-only), E2E 9×4 browsers | ✅ local |
 | Firefox compat | ⚠️ browser won't launch on this host (ISSUES #1) |
-| Deploy to prod | ⛔ Cloudflare auth (ISSUES #2) |
-| Prod tests via Access service token | ⏳ needs `.env.test` + deploy |
+| Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
+| Prod tests via Access service token: system 20, security 49, E2E 18 | ✅ |
+| Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |
+| In-Worker Access JWT check (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) | ⏳ optional, not enabled |
 | Remote git | ⏳ owner to configure |
 
 ## Next ideas (backlog)
