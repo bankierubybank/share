@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1 — 2026-10-26 (deployed, version 0461372b)
+
+Found by exploratory prod test ("Phuket trip", iPhone + laptop).
+
+### Fixed
+- Summary `paid`/`owed` no longer include settle-up payments; payments affect `net` only (`src/lib/money.ts`).
+  Before: after "Chai → Ann 212.62", Chai showed Paid 4,712.62 / Ann Share 5,325.25.
+- Balance rows rebuilt as custom layout: amounts no longer cut off with "…" on phones.
+- Laptop: "Add bill" moved into the Bills card header (FAB hidden ≥960px; overlapped People card).
+- **Security**: Playwright sent the Access service token via `extraHTTPHeaders` to *all* hosts incl.
+  fonts.googleapis.com / fonts.gstatic.com. Now attached per-origin in `test/e2e/fixtures.ts`.
+
+### Added
+- Unit tests for payments in balances; system test `test/system/payments.test.ts`;
+  E2E: Paid/Share after settle + no clipping; "token never sent to third-party hosts".
+
 ## 0.1.0 deploy — 2026-10-23
 
 ### Deployed

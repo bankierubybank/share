@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // UI flows. Runs on every project in playwright.config.ts (desktop + phone = compatibility matrix).
 
@@ -8,6 +9,9 @@ async function fill(page: Page, testid: string, value: string) {
   const input = page.getByTestId(testid).locator("input");
   await input.fill(value);
 }
+
+/** FAB on phones, header button on laptops — both carry testid "add-bill"; click the visible one. */
+const addBillBtn = (page: Page) => page.getByTestId("add-bill").filter({ visible: true }).first();
 
 async function createGroup(page: Page, name: string, people: string[]) {
   await page.goto("/");
@@ -35,7 +39,7 @@ async function pickOption(page: Page, selectTestId: string, label: string) {
 }
 
 async function addEqualBill(page: Page, desc: string, amount: string, paidBy: string, exclude: string[] = []) {
-  await page.getByTestId("add-bill").click();
+  await addBillBtn(page).click();
   const dialog = page.getByTestId("bill-dialog");
   await expect(dialog).toBeVisible();
   await fill(page, "bill-description", desc);
@@ -78,7 +82,7 @@ test("equal split excluding someone; settle up to zero", async ({ page }) => {
 
 test("exact split validates the total", async ({ page }) => {
   await createGroup(page, `Exact ${uniq()}`, ["Ann", "Ben"]);
-  await page.getByTestId("add-bill").click();
+  await addBillBtn(page).click();
   await fill(page, "bill-description", "Groceries");
   await fill(page, "bill-amount", "100");
   await page.getByTestId("mode-exact").click();
@@ -167,10 +171,42 @@ test("layout fits the viewport (no horizontal scroll)", async ({ page }) => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow, `horizontal overflow on ${tab}`).toBeLessThanOrEqual(1);
   }
-  await page.getByTestId("add-bill").click();
+  await addBillBtn(page).click();
   const inner = page.getByTestId("bill-dialog").locator("dialog");
   await expect(inner).toBeVisible();
   const box = await inner.boundingBox();
   const vw = page.viewportSize()!.width;
   expect(box && box.width <= vw + 1).toBe(true);
+});
+
+test("payments don't inflate Paid/Share; balance rows fit", async ({ page }) => {
+  await createGroup(page, `Pay ${uniq()}`, ["Ann", "Ben"]);
+  await addEqualBill(page, "Hotel", "100", "Ann");
+  await showPanel(page, "summary");
+  await page.getByTestId("settle-btn").click();
+  await page.getByTestId("bill-save").click();
+  await expect(page.getByTestId("all-settled")).toBeVisible();
+  const rows = page.getByTestId("balance-row");
+  await expect(rows.filter({ hasText: "Ann" }).getByTestId("balance-detail")).toContainText(/Paid .*100\.00/);
+  await expect(rows.filter({ hasText: "Ann" }).getByTestId("balance-detail")).toContainText(/Share .*50\.00/);
+  await expect(rows.filter({ hasText: "Ben" }).getByTestId("balance-detail")).toContainText(/Paid .*0\.00/);
+  // Nothing in a balance row is clipped.
+  const clipped = await rows.evaluateAll((els) =>
+    els.flatMap((el) => [...el.querySelectorAll(".balance-detail span, .net")]).filter((s) => s.scrollWidth > s.clientWidth + 1).length,
+  );
+  expect(clipped).toBe(0);
+});
+
+test("access token is never sent to third-party hosts", async ({ page, baseURL }) => {
+  const appOrigin = new URL(baseURL!).origin;
+  const leaks: string[] = [];
+  page.on("request", async (req) => {
+    const h = await req.allHeaders();
+    if (new URL(req.url()).origin !== appOrigin && ("cf-access-client-secret" in h || "cf-access-client-id" in h))
+      leaks.push(req.url());
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("group-name")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(leaks).toEqual([]);
 });

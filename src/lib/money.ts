@@ -28,12 +28,17 @@ export function splitEqual(amount: number, memberIds: string[]): Share[] {
 }
 
 export interface BillForBalance {
+  /** Defaults to "expense". Payments move money between members: they change `net` only. */
+  kind?: "expense" | "payment";
   paidBy: string;
   amount: number;
   shares: Share[];
 }
 
-/** Per-member balances. net > 0 → member is owed money; net < 0 → member owes. */
+/**
+ * Per-member balances. `paid`/`owed` count expenses only (what you spent / your share).
+ * net = paid - owed + payments sent - payments received. net > 0 → member is owed money.
+ */
 export function computeBalances(memberIds: string[], bills: BillForBalance[]): Balance[] {
   const map = new Map<string, Balance>();
   for (const id of memberIds) map.set(id, { memberId: id, paid: 0, owed: 0, net: 0 });
@@ -45,11 +50,19 @@ export function computeBalances(memberIds: string[], bills: BillForBalance[]): B
     }
     return b;
   };
+  const transfers = new Map<string, number>();
   for (const bill of bills) {
+    if (bill.kind === "payment") {
+      transfers.set(bill.paidBy, (transfers.get(bill.paidBy) ?? 0) + bill.amount);
+      for (const s of bill.shares) transfers.set(s.memberId, (transfers.get(s.memberId) ?? 0) - s.amount);
+      get(bill.paidBy);
+      for (const s of bill.shares) get(s.memberId);
+      continue;
+    }
     get(bill.paidBy).paid += bill.amount;
     for (const s of bill.shares) get(s.memberId).owed += s.amount;
   }
-  for (const b of map.values()) b.net = b.paid - b.owed;
+  for (const b of map.values()) b.net = b.paid - b.owed + (transfers.get(b.memberId) ?? 0);
   return [...map.values()];
 }
 

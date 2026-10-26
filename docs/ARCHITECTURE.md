@@ -27,10 +27,10 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 | `web/` | Frontend source (Vite root). `web/src/main.ts` app, `web/src/api.ts` client, `web/src/money.ts` formatting |
 | `dist/` | Built assets (git-ignored) |
 | `test/unit` | Pure logic (vitest, node) |
-| `test/integration` | Worker + D1 in workerd (`@cloudflare/vitest-pool-workers`) |
-| `test/system` | Full HTTP API flows vs running server (`BASE_URL`) |
+| `test/integration` | Worker + D1 in workerd (`@cloudflare/vitest-plugin`) |
+| `test/system` | Full HTTP API flows vs running server (`TARGET_URL`) |
 | `test/security` | Headers, injection, validation, auth, IDOR vs running server |
-| `test/e2e` | Playwright UI flows; projects = chromium, firefox, webkit, Pixel 7, iPhone 14 (compatibility) |
+| `test/e2e` | Playwright UI flows (`fixtures.ts` attaches Access token to app origin only); projects = chromium, firefox, webkit, Pixel 7, iPhone 14 (compatibility) |
 | `scripts/` | `test-local.sh`, `test-prod.sh`, `ship.sh` |
 
 ## Data model (D1 / SQLite)

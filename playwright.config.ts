@@ -4,10 +4,8 @@ import { config } from "dotenv";
 config({ path: ".env.test", quiet: true });
 
 const BASE_URL = process.env.TARGET_URL ?? "http://localhost:8787";
-const id = process.env.CF_ACCESS_CLIENT_ID;
-const secret = process.env.CF_ACCESS_CLIENT_SECRET;
-// Cloudflare Access service token headers (prod). Harmless locally.
-const extraHTTPHeaders = id && secret ? { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret } : undefined;
+// Access service token is attached per-origin in test/e2e/fixtures.ts — NOT via extraHTTPHeaders,
+// which would leak it to third-party hosts (Google Fonts).
 
 export default defineConfig({
   testDir: "test/e2e",
@@ -15,7 +13,7 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
-  use: { baseURL: BASE_URL, extraHTTPHeaders, trace: "retain-on-failure" },
+  use: { baseURL: BASE_URL, trace: "retain-on-failure" },
   // Compatibility matrix: desktop engines + phone emulation. `npm run test:e2e` runs chromium only.
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

@@ -7,7 +7,7 @@ import { LIMITS, parseBill, parseGroupPatch, parseMemberName, parseNewGroup } fr
 
 export type AppEnv = { Bindings: Env };
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 
 export function apiError(c: Context, status: number, code: string, message: string) {
   return c.json({ error: { code, message } }, status as 400);

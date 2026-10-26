@@ -25,7 +25,8 @@ Bill    = { id: string; kind: 'expense' | 'payment'; description: string; amount
             paidBy: string; date: string; splitMode: 'equal' | 'exact'; shares: Share[]; createdAt: string }
 Split   = { mode: 'equal'; members: string[] }            // >=1 member ids
         | { mode: 'exact'; shares: Share[] }              // sum(amount) === bill.amount
-Balance = { memberId: string; paid: number; owed: number; net: number }  // net = paid - owed (+ = is owed money)
+Balance = { memberId: string; paid: number; owed: number; net: number }
+// paid/owed = expenses only; net = paid - owed + payments sent - payments received (+ = is owed money)
 Settlement = { from: string; to: string; amount: number } // `from` pays `to`
 ```
 

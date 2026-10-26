@@ -8,3 +8,6 @@
 | 4 | fixed | bug | Bill shares returned in DB order, not member order. Fixed in `src/db.ts` (ORDER BY members.position). |
 | 5 | fixed | test | Vitest forces `process.env.BASE_URL="/"`; tests now use `TARGET_URL`. |
 | 6 | note | policy | Org hooks on this machine block `rm -rf` and shell commands containing SQL-injection-like strings; use Write/Edit tools. |
+| 7 | fixed 2026-10-26 | bug | Balances `paid`/`owed` counted settle-up payments (net was right). Fixed in `computeBalances`. |
+| 8 | fixed 2026-10-26 | ui | Phone balance rows clipped amounts ("THB 3,250.…"); laptop FAB overlapped People card. |
+| 9 | fixed 2026-10-26 / **action: rotate token** | security | E2E config leaked Access service token to Google Fonts hosts (prod runs 2026-10-23 + 26). Fixed via per-origin route fixture. Owner should rotate service token `share-tests` and update `.env.test`. |

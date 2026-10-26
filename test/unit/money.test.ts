@@ -50,6 +50,30 @@ describe("computeBalances", () => {
     );
     expect(b.reduce((a, x) => a + x.net, 0)).toBe(0);
   });
+  it("payments change net only, not paid/owed", () => {
+    const b = computeBalances(
+      ["a", "b"],
+      [
+        { paidBy: "a", amount: 1000, shares: splitEqual(1000, ["a", "b"]) },
+        { kind: "payment", paidBy: "b", amount: 500, shares: [{ memberId: "a", amount: 500 }] },
+      ],
+    );
+    expect(b).toEqual([
+      { memberId: "a", paid: 1000, owed: 500, net: 0 },
+      { memberId: "b", paid: 0, owed: 500, net: 0 },
+    ]);
+  });
+  it("partial payment leaves the remainder outstanding", () => {
+    const b = computeBalances(
+      ["a", "b"],
+      [
+        { paidBy: "a", amount: 1000, shares: [{ memberId: "b", amount: 1000 }] },
+        { kind: "payment", paidBy: "b", amount: 300, shares: [{ memberId: "a", amount: 300 }] },
+      ],
+    );
+    expect(b.map((x) => x.net)).toEqual([700, -700]);
+    expect(b.map((x) => x.paid)).toEqual([1000, 0]);
+  });
   it("includes members with no activity", () => {
     expect(computeBalances(["a"], [])).toEqual([{ memberId: "a", paid: 0, owed: 0, net: 0 }]);
   });

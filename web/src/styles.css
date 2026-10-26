@@ -148,7 +148,8 @@ h1, h2, p { margin: 0; }
 .card.flush { padding: 0; overflow: hidden; }
 .card.tonal { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
 .card > h2 { margin-bottom: 16px; }
-.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 16px 20px 4px; }
+.card-head .grow-text { margin-left: auto; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 20px 4px; }
 .card.empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 20px; text-align: center; }
 .card.empty md-icon { font-size: 48px; width: 48px; height: 48px; color: var(--md-sys-color-primary); }
 
@@ -179,6 +180,13 @@ md-list { background: transparent; --md-list-container-color: transparent; }
 .net.pos { color: var(--positive); }
 .net.neg { color: var(--negative); }
 .amount-owed { color: var(--md-sys-color-on-surface); }
+.balances { padding: 4px 0 8px; }
+.balance-row { display: flex; gap: 16px; padding: 10px 20px; align-items: flex-start; }
+.balance-row .avatar { flex: none; }
+.balance-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.balance-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.balance-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.balance-detail { display: flex; flex-wrap: wrap; column-gap: 12px; }
 .settled { display: flex; align-items: center; gap: 12px; padding: 16px 20px 24px; color: var(--positive); }
 
 /* ---------- Group layout ---------- */
@@ -202,6 +210,12 @@ md-list { background: transparent; --md-list-container-color: transparent; }
   .panel-bills { grid-area: bills; }
   .panel-summary { grid-area: summary; }
   .panel-members { grid-area: members; }
+}
+
+.wide-only { display: none; }
+@media (min-width: 960px) {
+  .wide-only { display: inline-flex; }
+  .narrow-only { display: none !important; }
 }
 
 .fab {

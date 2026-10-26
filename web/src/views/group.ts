@@ -141,6 +141,10 @@ export async function renderGroup(root: HTMLElement, gid: string) {
 
   // ---------- panels ----------
 
+  /** Laptop: "Add bill" lives in the Bills card (FAB hidden via CSS). Same testid as the FAB. */
+  const addBillButton = () =>
+    h("md-filled-button", { class: "wide-only", onclick: () => addBill(), dataset: { testid: "add-bill" } }, icon("add", "icon"), "Add bill");
+
   function billsPanel() {
     const { bills, summary } = state;
     if (!bills.length)
@@ -149,7 +153,8 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         { class: "card empty", dataset: { testid: "bills-empty" } },
         icon("receipt_long"),
         h("p", { class: "md-typescale-body-large" }, "No bills yet"),
-        h("p", { class: "md-typescale-body-medium muted" }, "Add the first one with the + button."),
+        h("p", { class: "md-typescale-body-medium muted" }, "Add the first one with Add bill."),
+        addBillButton(),
       );
     let lastDate = "";
     const items: Node[] = [];
@@ -180,7 +185,8 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         "div",
         { class: "card-head" },
         h("h2", { class: "md-typescale-title-medium" }, "Bills"),
-        h("span", { class: "md-typescale-body-medium muted", dataset: { testid: "total-spent" } }, `Total ${money(summary.total)}`),
+        h("span", { class: "md-typescale-body-medium muted grow-text", dataset: { testid: "total-spent" } }, `Total ${money(summary.total)}`),
+        addBillButton(),
       ),
       h("md-list", { dataset: { testid: "bills-list" } }, items),
     );
@@ -208,20 +214,34 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         )
       : h("div", { class: "settled", dataset: { testid: "all-settled" } }, icon("check_circle"), h("span", { class: "md-typescale-body-large" }, "All settled up"));
 
+    // Custom rows (not md-list-item): its end slot squeezed and cut off amounts on phones.
     const balances = h(
-      "md-list",
-      { dataset: { testid: "balances" } },
+      "div",
+      { class: "balances", dataset: { testid: "balances" } },
       summary.balances.map((b) =>
         h(
-          "md-list-item",
-          null,
-          h("div", { slot: "start", class: "avatar initial" }, initial(memberName(b.memberId))),
-          h("div", { slot: "headline" }, memberName(b.memberId)),
-          h("div", { slot: "supporting-text", class: "tabular" }, `Paid ${money(b.paid)}`, h("br"), `Share ${money(b.owed)}`),
+          "div",
+          { class: "balance-row", dataset: { testid: "balance-row" } },
+          h("div", { class: "avatar initial" }, initial(memberName(b.memberId))),
           h(
             "div",
-            { slot: "end", class: `tabular net ${b.net > 0 ? "pos" : b.net < 0 ? "neg" : ""}` },
-            b.net > 0 ? `gets ${money(b.net)}` : b.net < 0 ? `owes ${money(-b.net)}` : "settled",
+            { class: "balance-main" },
+            h(
+              "div",
+              { class: "balance-top" },
+              h("span", { class: "md-typescale-body-large balance-name" }, memberName(b.memberId)),
+              h(
+                "span",
+                { class: `md-typescale-title-small tabular net ${b.net > 0 ? "pos" : b.net < 0 ? "neg" : ""}`, dataset: { testid: "balance-net" } },
+                b.net > 0 ? `gets ${money(b.net)}` : b.net < 0 ? `owes ${money(-b.net)}` : "settled",
+              ),
+            ),
+            h(
+              "div",
+              { class: "md-typescale-body-medium muted balance-detail", dataset: { testid: "balance-detail" } },
+              h("span", { class: "tabular" }, `Paid ${money(b.paid)}`),
+              h("span", { class: "tabular" }, `Share ${money(b.owed)}`),
+            ),
           ),
         ),
       ),
@@ -349,7 +369,7 @@ export async function renderGroup(root: HTMLElement, gid: string) {
       layout,
       h(
         "md-fab",
-        { class: "fab", variant: "primary", label: "Add bill", "aria-label": "Add bill", onclick: () => addBill(), dataset: { testid: "add-bill" } },
+        { class: "fab narrow-only", variant: "primary", label: "Add bill", "aria-label": "Add bill", onclick: () => addBill(), dataset: { testid: "add-bill" } },
         icon("add", "icon"),
       ),
     );
