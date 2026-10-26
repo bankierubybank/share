@@ -1,12 +1,30 @@
-import { api, ApiError, type Activity, type Bill, type Category, type Group, type Member, type Recurrence, type Summary } from "../api";
+// Components only the group view and its dialogs use: loaded with this chunk, not on the home page (#18).
+import "@material/web/checkbox/checkbox.js";
+import "@material/web/chips/filter-chip.js";
+import "@material/web/dialog/dialog.js";
+import "@material/web/fab/fab.js";
+import "@material/web/menu/menu.js";
+import "@material/web/menu/menu-item.js";
+import "@material/web/chips/assist-chip.js";
+import "@material/web/progress/circular-progress.js";
+import "@material/web/tabs/tabs.js";
+import "@material/web/tabs/primary-tab.js";
+
+import { api, ApiError, type Activity, type Bill, type Category, type Group, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney } from "../money";
-import { CATEGORY_META, CATEGORY_ORDER } from "../categories";
+import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
 import { forgetGroup, rememberGroup } from "../store";
-import { navigate } from "../router";
-import { openBillDialog } from "./bill-dialog";
-import { billsToCsv, downloadText, safeFilename } from "../export";
+import { dispatch, navigate } from "../router";
+import { lang, locale, setLang, t, tn } from "../i18n";
+import { attachPullToRefresh, attachRowGestures } from "../gestures";
+
+// Lazy chunks (#18): dialogs, export and stats load on first use.
+const loadBillDialog = () => import("./bill-dialog");
+const loadExport = () => import("../export");
+const loadStats = () => import("./stats");
+const loadMove = () => import("./move");
 import { currentTheme, setTheme, type Theme } from "../theme";
 
 type Tab = "bills" | "summary" | "members" | "activity";
@@ -20,40 +38,58 @@ interface State {
   summary: Summary;
   recurring: Recurrence[];
   activity: Activity[];
+  subgroups: Subgroup[];
 }
 
-export async function renderGroup(root: HTMLElement, gid: string) {
+/** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
+export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" | "view" = "edit") {
+  const isView = mode === "view";
+  let statsMod: Awaited<ReturnType<typeof loadStats>> | null = null;
   let tab: Tab = (session.get(`tab:${gid}`) as Tab) || "bills";
-  if (!TABS.includes(tab)) tab = "bills";
+  if (!TABS.includes(tab) || (mode === "view" && tab === "activity")) tab = "bills";
   let viewAs: string | null = local.get(`share.viewAs:${gid}`);
   let query = "";
   let catFilter: Category | null = null;
   let onlyMine = false;
   let state: State;
 
-  clear(root, appBar("Loading…"), h("main", { class: "page center", "aria-busy": "true" }, h("md-circular-progress", { indeterminate: true, "aria-label": "Loading" })));
+  clear(root, appBar(t("common.loading")), h("main", { class: "page center", "aria-busy": "true" }, h("md-circular-progress", { indeterminate: true, "aria-label": t("common.loading") })));
 
   async function load(): Promise<boolean> {
     try {
-      const [g, summary, rec, act] = await Promise.all([api.getGroup(gid), api.summary(gid), api.recurring(gid), api.activity(gid)]);
-      state = { ...g, summary, recurring: rec.recurring, activity: act.activity };
+      if (isView) {
+        const [v, sm] = await Promise.all([api.view(gid), loadStats()]);
+        statsMod = sm;
+        state = {
+          group: { ...v.group, id: "" },
+          members: v.members.map((m) => ({ ...m, promptpay: null })),
+          bills: v.bills.map((b) => ({ ...b, createdBy: null, hasReceipt: false, recurrenceId: null })),
+          summary: v.summary, recurring: [], activity: [], subgroups: [],
+        };
+      } else {
+        const [g, summary, rec, act, subs, sm] = await Promise.all([
+          api.getGroup(gid), api.summary(gid), api.recurring(gid), api.activity(gid), api.subgroups(gid), loadStats(),
+        ]);
+        statsMod = sm;
+        state = { ...g, summary, recurring: rec.recurring, activity: act.activity, subgroups: subs.subgroups };
+        rememberGroup(g.group);
+      }
       if (viewAs && !state.members.some((m) => m.id === viewAs)) viewAs = null;
-      rememberGroup(g.group);
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        forgetGroup(gid);
-        clear(root, appBar("Not found"),
+        if (!isView) forgetGroup(gid);
+        clear(root, appBar(t("common.notFound")),
           h("main", { class: "page center stack", dataset: { testid: "group-not-found" } },
             icon("search_off"),
-            h("p", { class: "md-typescale-body-large" }, "This group doesn't exist or the link is wrong."),
-            h("md-filled-button", { onclick: () => navigate("/") }, "Go home")));
+            h("p", { class: "md-typescale-body-large" }, isView ? t("group.viewGone") : t("group.gone")),
+            h("md-filled-button", { onclick: () => navigate("/") }, t("common.goHome"))));
       } else {
-        clear(root, appBar("Error"),
+        clear(root, appBar(t("common.error")),
           h("main", { class: "page center stack" },
             icon("cloud_off"),
-            h("p", { class: "md-typescale-body-large", role: "alert" }, err instanceof Error ? err.message : "Something went wrong"),
-            h("md-filled-button", { onclick: () => renderGroup(root, gid) }, "Retry")));
+            h("p", { class: "md-typescale-body-large", role: "alert" }, err instanceof Error ? err.message : t("common.somethingWrong")),
+            h("md-filled-button", { onclick: () => renderGroup(root, gid) }, t("common.retry"))));
       }
       return false;
     }
@@ -63,13 +99,13 @@ export async function renderGroup(root: HTMLElement, gid: string) {
     if (await load()) render();
   }
 
-  const memberName = (id: string) => state.members.find((m) => m.id === id)?.name ?? "Removed";
+  const memberName = (id: string) => state.members.find((m) => m.id === id)?.name ?? t("member.removed");
   const money = (n: number) => formatMoney(n, state.group.currency);
-  const readOnly = () => state.group.archived;
+  const readOnly = () => isView || state.group.archived;
 
   function appBar(title: string, actions: Node[] = []) {
     return h("header", { class: "top-app-bar" },
-      h("md-icon-button", { "aria-label": "Back to home", onclick: () => navigate("/"), dataset: { testid: "nav-home" } }, icon("arrow_back")),
+      h("md-icon-button", { "aria-label": t("group.backHome"), onclick: () => navigate("/"), dataset: { testid: "nav-home" } }, icon("arrow_back")),
       h("h1", { class: "md-typescale-title-large title", dataset: { testid: "group-title" } }, title),
       h("div", { class: "actions" }, actions));
   }
@@ -85,15 +121,16 @@ export async function renderGroup(root: HTMLElement, gid: string) {
     }
     try {
       await navigator.clipboard.writeText(url);
-      snackbar("Link copied — send it to your group");
+      snackbar(t("group.linkCopied"));
     } catch {
       snackbar(url);
     }
   }
 
-  function exportCsv() {
+  async function exportCsv() {
+    const { billsToCsv, downloadText, safeFilename } = await loadExport();
     downloadText(`${safeFilename(state.group.name)}-${new Date().toISOString().slice(0, 10)}.csv`, billsToCsv(state));
-    snackbar("CSV downloaded");
+    snackbar(t("group.csvDownloaded"));
   }
 
   function printPdf() {
@@ -106,17 +143,18 @@ export async function renderGroup(root: HTMLElement, gid: string) {
 
   function overflowMenu() {
     const anchorId = "group-more";
-    const btn = h("md-icon-button", { id: anchorId, "aria-label": "More actions", "aria-haspopup": "menu", dataset: { testid: "group-more" } }, icon("more_vert"));
-    const themeLabel: Record<Theme, string> = { system: "Theme: system", light: "Theme: light", dark: "Theme: dark" };
+    const btn = h("md-icon-button", { id: anchorId, "aria-label": t("group.more"), "aria-haspopup": "menu", dataset: { testid: "group-more" } }, icon("more_vert"));
+    const themeLabel: Record<Theme, string> = { system: t("theme.menu.system"), light: t("theme.light"), dark: t("theme.dark") };
     const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
     const item = (label: string, ic: Parameters<typeof icon>[0], testid: string, run: () => void) =>
       h("md-menu-item", { dataset: { testid }, onclick: run }, h("div", { slot: "headline" }, label), icon(ic, "start"));
     const menu = h("md-menu", { anchor: anchorId, positioning: "fixed", quick: true, dataset: { testid: "group-menu" } },
-      item("Export CSV", "table_view", "export-csv", exportCsv),
-      item("Print / save as PDF", "print", "export-print", printPdf),
-      item(themeLabel[currentTheme()] + " — change", currentTheme() === "dark" ? "dark_mode" : currentTheme() === "light" ? "light_mode" : "contrast", "theme-toggle",
+      item(t("menu.exportCsv"), "table_view", "export-csv", exportCsv),
+      item(t("menu.print"), "print", "export-print", printPdf),
+      item(t("menu.themeChange", { label: themeLabel[currentTheme()] }), currentTheme() === "dark" ? "dark_mode" : currentTheme() === "light" ? "light_mode" : "contrast", "theme-toggle",
         () => { setTheme(next[currentTheme()]); snackbar(themeLabel[currentTheme()]); }),
-      item("Group settings", "settings", "group-settings", editGroup),
+      item(t("lang.switchTo"), "translate", "lang-toggle", () => { setLang(lang() === "th" ? "en" : "th"); dispatch(); }),
+      item(t("menu.settings"), "settings", "group-settings", editGroup),
     ) as HTMLElement & { open: boolean; show(): void; close(): void };
     // `quick`: md-menu's close animation computed scale(Infinity) here and never finished, leaving the menu
     // stuck (open=false but painted) so it could not reopen. No animation = reliable.
@@ -125,104 +163,130 @@ export async function renderGroup(root: HTMLElement, gid: string) {
   }
 
   async function editGroup() {
-    const name = h("md-outlined-text-field", { label: "Group name", value: state.group.name, maxLength: 60, dataset: { testid: "edit-group-name" } }) as Field;
-    const cur = h("md-outlined-select", { quick: true, label: "Currency" },
+    const name = h("md-outlined-text-field", { label: t("home.groupName"), value: state.group.name, maxLength: 60, dataset: { testid: "edit-group-name" } }) as Field;
+    const cur = h("md-outlined-select", { quick: true, label: t("home.currency") },
       CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === state.group.currency }, h("div", { slot: "headline" }, c)))) as HTMLElement & { value: string };
     const err = h("div", { class: "form-error", role: "alert" });
     const archived = state.group.archived;
     const d = h("md-dialog", { dataset: { testid: "settings-dialog" } },
-      h("div", { slot: "headline" }, "Group settings"),
+      h("div", { slot: "headline" }, t("menu.settings")),
       h("div", { slot: "content", class: "stack" },
         !archived && name, !archived && cur,
-        !archived && h("p", { class: "md-typescale-body-small muted" }, "Changing currency does not convert existing amounts."),
+        !archived && h("p", { class: "md-typescale-body-small muted" }, t("settings.currencyNote")),
+        await viewLinkSection(),
+        !archived && h("div", { class: "stack-sm" },
+          h("h2", { class: "md-typescale-title-small" }, t("settings.merge")),
+          h("md-outlined-button", { dataset: { testid: "merge-group" }, onclick: () => { d.close("cancel"); void mergeFlow(); } },
+            icon("groups", "icon"), t("settings.mergeBtn"))),
         h("div", { class: "danger-zone stack-sm" },
-          h("h2", { class: "md-typescale-title-small" }, archived ? "This group is archived" : "Finished with this group?"),
-          h("p", { class: "md-typescale-body-small muted" }, archived ? "Unarchive to add or change bills again." : "Archiving makes it read-only and moves it down your list. Nothing is deleted."),
+          h("h2", { class: "md-typescale-title-small" }, archived ? t("settings.archivedTitle") : t("settings.finished")),
+          h("p", { class: "md-typescale-body-small muted" }, archived ? t("settings.archivedHelp") : t("settings.archiveHelp")),
           h("div", { class: "row wrap" },
             h("md-outlined-button", { dataset: { testid: archived ? "unarchive-group" : "archive-group" }, onclick: async () => {
               try {
                 await api.updateGroup(gid, { archived: !archived });
-                snackbar(archived ? "Group unarchived" : "Group archived");
+                snackbar(archived ? t("settings.unarchivedToast") : t("settings.archivedToast"));
                 d.close("ok");
               } catch (e) {
-                err.textContent = e instanceof Error ? e.message : "Could not update";
+                err.textContent = e instanceof Error ? e.message : t("common.updateFailed");
               }
-            } }, icon(archived ? "unarchive" : "archive", "icon"), archived ? "Unarchive" : "Archive"),
+            } }, icon(archived ? "unarchive" : "archive", "icon"), archived ? t("settings.unarchive") : t("settings.archive")),
             h("md-text-button", { class: "danger", dataset: { testid: "delete-group" }, onclick: async () => { d.close("cancel"); await deleteGroupFlow(); } },
-              icon("delete_forever", "icon"), "Delete group…"))),
+              icon("delete_forever", "icon"), t("settings.deleteGroup")))),
         err),
       h("div", { slot: "actions" },
-        h("md-text-button", { onclick: () => d.close("cancel") }, archived ? "Close" : "Cancel"),
+        h("md-text-button", { onclick: () => d.close("cancel") }, archived ? t("common.close") : t("common.cancel")),
         !archived && h("md-filled-button", { dataset: { testid: "edit-group-save" }, onclick: async () => {
           try {
             await api.updateGroup(gid, { name: name.value, currency: cur.value });
             d.close("ok");
           } catch (e) {
-            err.textContent = e instanceof Error ? e.message : "Could not save";
+            err.textContent = e instanceof Error ? e.message : t("common.saveFailed");
           }
-        } }, "Save")),
+        } }, t("common.save"))),
     ) as MdDialog;
     if ((await openDialog(d)) === "ok") refresh();
   }
 
   async function deleteGroupFlow() {
-    const field = h("md-outlined-text-field", { label: "Type the group name to confirm", dataset: { testid: "delete-confirm-input" } }) as Field;
-    const btn = h("md-filled-button", { class: "danger-filled", disabled: true, dataset: { testid: "delete-confirm" } }, "Delete forever") as HTMLElement & { disabled: boolean };
+    const field = h("md-outlined-text-field", { label: t("delete.confirmLabel"), dataset: { testid: "delete-confirm-input" } }) as Field;
+    const btn = h("md-filled-button", { class: "danger-filled", disabled: true, dataset: { testid: "delete-confirm" } }, t("delete.forever")) as HTMLElement & { disabled: boolean };
     field.addEventListener("input", () => (btn.disabled = field.value.trim() !== state.group.name));
     const d = h("md-dialog", { type: "alert", dataset: { testid: "delete-dialog" } },
-      h("div", { slot: "headline" }, `Delete “${state.group.name}”?`),
+      h("div", { slot: "headline" }, t("delete.title", { name: state.group.name })),
       h("div", { slot: "content", class: "stack" },
-        h("p", { class: "md-typescale-body-medium" }, "All bills, people, receipts and history are deleted for everyone with the link. This can't be undone."),
+        h("p", { class: "md-typescale-body-medium" }, t("delete.text")),
         field),
-      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, "Cancel"), btn)) as MdDialog;
+      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")), btn)) as MdDialog;
     btn.addEventListener("click", async () => {
       try {
         await api.deleteGroup(gid);
         d.close("ok");
       } catch (e) {
-        snackbar(e instanceof Error ? e.message : "Could not delete");
+        snackbar(e instanceof Error ? e.message : t("common.deleteFailed"));
       }
     });
     if ((await openDialog(d)) === "ok") {
       forgetGroup(gid);
-      snackbar("Group deleted");
+      snackbar(t("delete.done"));
       navigate("/", true);
     }
   }
 
-  const billOpts = () => ({ group: state.group, members: state.members, bills: state.bills, viewAs, onDeleted: undoable });
+  const billOpts = () => ({
+    group: state.group, members: state.members, bills: state.bills, viewAs, subgroups: state.subgroups,
+    onDeleted: undoable, onDuplicate: (b: Bill) => void duplicateBill(b),
+  });
+  const openBillDialog = async (o: Parameters<Awaited<ReturnType<typeof loadBillDialog>>["openBillDialog"]>[0]) =>
+    (await loadBillDialog()).openBillDialog(o);
+
+  async function duplicateBill(b: Bill) {
+    if (readOnly()) return;
+    if (await openBillDialog({ ...billOpts(), template: b })) refresh();
+  }
+
+  async function swipeDelete(b: Bill) {
+    try {
+      await api.deleteBill(gid, b.id);
+      undoable(b);
+      refresh();
+    } catch (e) {
+      snackbar(e instanceof Error ? e.message : t("common.deleteFailed"));
+    }
+  }
 
   async function addBill(payment?: { from: string; to: string; amount: number }) {
-    if (readOnly()) return snackbar("This group is archived");
-    if (!state.members.length) return snackbar("Add people first");
+    if (readOnly()) return snackbar(t("group.archivedToast"));
+    if (!state.members.length) return snackbar(t("group.addPeopleFirst"));
     if (await openBillDialog({ ...billOpts(), payment })) refresh();
   }
 
   async function editBill(bill: Bill) {
-    if (readOnly()) return snackbar("This group is archived — unarchive it in settings to edit");
+    if (isView) return;
+    if (readOnly()) return snackbar(t("group.archivedEdit"));
     if (await openBillDialog({ ...billOpts(), bill })) refresh();
   }
 
   function undoable(bill: Bill) {
-    snackbar(`“${bill.description}” deleted`, {
-      label: "Undo",
+    snackbar(t("bill.deletedToast", { desc: bill.description }), {
+      label: t("common.undo"),
       run: async () => {
         try {
           await api.restoreBill(gid, bill.id);
-          snackbar("Bill restored");
+          snackbar(t("bill.restored"));
           refresh();
         } catch (e) {
-          snackbar(e instanceof Error ? e.message : "Could not restore");
+          snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
         }
       },
     });
   }
 
   async function editMember(m: Member | null) {
-    const name = h("md-outlined-text-field", { label: "Name", value: m?.name ?? "", maxLength: 60, required: true, dataset: { testid: "member-name-input" } }) as Field;
+    const name = h("md-outlined-text-field", { label: t("common.name"), value: m?.name ?? "", maxLength: 60, required: true, dataset: { testid: "member-name-input" } }) as Field;
     const pp = h("md-outlined-text-field", {
-      label: "PromptPay (optional)", value: m?.promptpay ?? "", inputMode: "numeric",
-      supportingText: "Mobile number or national ID — shows a QR when someone settles up in THB",
+      label: t("member.promptpayLabel"), value: m?.promptpay ?? "", inputMode: "numeric",
+      supportingText: t("member.promptpayHelp"),
       dataset: { testid: "member-promptpay-input" },
     }) as Field;
     const save = async () => {
@@ -232,17 +296,17 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         else await api.addMember(gid, name.value, pp.value.trim() || null);
         d.close("ok");
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Could not save";
+        const msg = e instanceof Error ? e.message : t("common.saveFailed");
         const f = /promptpay/i.test(msg) ? pp : name;
         f.error = true;
-        f.errorText = /promptpay/i.test(msg) ? "Use a 10-digit mobile or 13-digit ID" : msg;
+        f.errorText = /promptpay/i.test(msg) ? t("member.promptpayError") : msg;
       }
     };
     const d = h("md-dialog", { dataset: { testid: "member-dialog" } },
-      h("div", { slot: "headline" }, m ? `Edit ${m.name}` : "Add person"),
+      h("div", { slot: "headline" }, m ? t("member.edit", { name: m.name }) : t("member.add")),
       h("form", { slot: "content", class: "stack", onsubmit: (e: Event) => { e.preventDefault(); save(); } }, name, pp),
-      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, "Cancel"),
-        h("md-filled-button", { onclick: save, dataset: { testid: "member-save" } }, "Save"))) as MdDialog;
+      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
+        h("md-filled-button", { onclick: save, dataset: { testid: "member-save" } }, t("common.save")))) as MdDialog;
     d.addEventListener("opened", () => name.focus(), { once: true });
     if ((await openDialog(d)) === "ok") refresh();
   }
@@ -253,24 +317,24 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         icon("repeat", "start"),
         h("div", { slot: "headline" }, String(r.template.description)),
         h("div", { slot: "supporting-text" },
-          `${r.frequency === "monthly" ? "Monthly" : "Weekly"} · ${r.template.amount !== undefined ? money(r.template.amount) : ""}`,
-          r.active ? ` · next ${formatDate(r.nextDate)}` : r.lastError ? ` · stopped: ${r.lastError}` : " · stopped"),
+          `${r.frequency === "monthly" ? t("recurring.monthly") : t("recurring.weekly")} · ${r.template.amount !== undefined ? money(r.template.amount) : ""}`,
+          r.active ? t("recurring.next", { date: formatDate(r.nextDate) }) : r.lastError ? t("recurring.stoppedErr", { err: r.lastError }) : t("recurring.stopped")),
         r.active && !readOnly() && h("md-text-button", { slot: "end", dataset: { testid: "recurring-stop" }, onclick: async () => {
-          if (!(await confirmDialog("Stop repeating?", "Bills already added stay. No new ones will be created.", "Stop"))) return;
+          if (!(await confirmDialog(t("recurring.stopTitle"), t("recurring.stopText"), t("common.stop")))) return;
           await api.stopRecurring(gid, r.id);
           d.close("ok");
-        } }, "Stop"))));
+        } }, t("common.stop")))));
     const d = h("md-dialog", { dataset: { testid: "recurring-dialog" } },
-      h("div", { slot: "headline" }, "Repeating bills"),
-      h("div", { slot: "content" }, state.recurring.length ? list : h("p", null, "No repeating bills. Choose “Repeat” under More options when adding a bill.")),
-      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, "Close"))) as MdDialog;
+      h("div", { slot: "headline" }, t("recurring.title")),
+      h("div", { slot: "content" }, state.recurring.length ? list : h("p", null, t("recurring.none"))),
+      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.close")))) as MdDialog;
     if ((await openDialog(d)) === "ok") refresh();
   }
 
   // ---------- panels ----------
 
   const addBillButton = () =>
-    h("md-filled-button", { class: "wide-only", disabled: readOnly(), onclick: () => addBill(), dataset: { testid: "add-bill" } }, icon("add", "icon"), "Add bill");
+    isView ? null : h("md-filled-button", { class: "wide-only", disabled: readOnly(), onclick: () => addBill(), dataset: { testid: "add-bill" } }, icon("add", "icon"), t("bill.add"));
 
   const involves = (b: Bill, id: string) => b.payers.some((p) => p.memberId === id) || b.shares.some((s) => s.memberId === id);
 
@@ -285,32 +349,32 @@ export async function renderGroup(root: HTMLElement, gid: string) {
   function billsPanel() {
     const { bills, summary } = state;
     const head = h("div", { class: "card-head" },
-      h("h2", { class: "md-typescale-title-medium" }, "Bills"),
-      h("span", { class: "md-typescale-body-medium muted grow-text", dataset: { testid: "total-spent" } }, `Total ${money(summary.total)}`),
+      h("h2", { class: "md-typescale-title-medium" }, t("tab.bills")),
+      h("span", { class: "md-typescale-body-medium muted grow-text", dataset: { testid: "total-spent" } }, t("bills.total", { amount: money(summary.total) })),
       addBillButton());
     if (!bills.length)
-      return h("section", { class: "card empty", dataset: { testid: "bills-empty" }, "aria-label": "Bills" },
+      return h("section", { class: "card empty", dataset: { testid: "bills-empty" }, "aria-label": t("tab.bills") },
         icon("receipt_long"),
-        h("p", { class: "md-typescale-body-large" }, "No bills yet"),
-        h("p", { class: "md-typescale-body-medium muted" }, readOnly() ? "This group is archived." : "Add the first one with Add bill."),
+        h("p", { class: "md-typescale-body-large" }, t("bills.none")),
+        h("p", { class: "md-typescale-body-medium muted" }, readOnly() ? t("bills.archivedEmpty") : t("bills.addFirst")),
         addBillButton(),
-        state.recurring.some((r) => r.active) && h("md-text-button", { onclick: showRecurring }, icon("repeat", "icon"), "Repeating bills"));
+        state.recurring.some((r) => r.active) && h("md-text-button", { onclick: showRecurring }, icon("repeat", "icon"), t("recurring.title")));
 
     const listHost = h("div", { "aria-live": "polite" });
     const search = h("md-outlined-text-field", {
-      class: "search-field", type: "search", label: "Search bills", value: query, dataset: { testid: "bill-search" },
+      class: "search-field", type: "search", label: t("bills.search"), value: query, dataset: { testid: "bill-search" },
       oninput: (e: Event) => { query = (e.target as Field).value; renderList(); },
     });
     search.prepend(icon("search", "leading-icon"));
     const usedCats = CATEGORY_ORDER.filter((c) => bills.some((b) => b.category === c));
-    const catChips = h("md-chip-set", { class: "chip-scroll", "aria-label": "Filter by category" },
+    const catChips = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bills.filterCat") },
       viewAs && (() => {
-        const c = h("md-filter-chip", { label: `Only ${memberName(viewAs)}`, selected: onlyMine, dataset: { testid: "filter-mine" } }) as HTMLElement & { selected: boolean };
+        const c = h("md-filter-chip", { label: t("bills.only", { name: memberName(viewAs) }), selected: onlyMine, dataset: { testid: "filter-mine" } }) as HTMLElement & { selected: boolean };
         c.addEventListener("click", (e) => { e.preventDefault(); onlyMine = !onlyMine; c.selected = onlyMine; renderList(); });
         return c;
       })(),
       usedCats.length > 1 && usedCats.map((cat) => {
-        const c = h("md-filter-chip", { label: CATEGORY_META[cat].label, selected: catFilter === cat, dataset: { testid: `filter-cat-${cat}` } }) as HTMLElement & { selected: boolean };
+        const c = h("md-filter-chip", { label: categoryLabel(cat), selected: catFilter === cat, dataset: { testid: `filter-cat-${cat}` } }) as HTMLElement & { selected: boolean };
         c.prepend(icon(CATEGORY_META[cat].icon, "icon"));
         c.addEventListener("click", (e) => {
           e.preventDefault();
@@ -324,7 +388,7 @@ export async function renderGroup(root: HTMLElement, gid: string) {
 
     function renderList() {
       const list = filteredBills();
-      if (!list.length) return clear(listHost, h("p", { class: "pad muted md-typescale-body-medium", dataset: { testid: "bills-no-match" } }, "No bills match."));
+      if (!list.length) return clear(listHost, h("p", { class: "pad muted md-typescale-body-medium", dataset: { testid: "bills-no-match" } }, t("bills.noMatch")));
       let lastDate = "";
       const items: Node[] = [];
       for (const b of list) {
@@ -334,31 +398,39 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         }
         const isPayment = b.kind === "payment";
         const payers = b.payers.length > 1 ? b.payers.map((p) => memberName(p.memberId)).join(" & ") : memberName(b.paidBy);
-        const who = b.shares.length === state.members.length ? "everyone" : state.members.filter((m) => b.shares.some((s) => s.memberId === m.id)).map((m) => m.name).join(", ");
+        const who = b.shares.length === state.members.length ? t("bills.everyone") : state.members.filter((m) => b.shares.some((s) => s.memberId === m.id)).map((m) => m.name).join(", ");
         const mine = viewAs ? b.shares.find((s) => s.memberId === viewAs)?.amount ?? 0 : null;
-        const supporting = isPayment ? `${payers} → ${memberName(b.shares[0]?.memberId ?? "")}` : `${payers} paid · ${who}`;
+        const supporting = isPayment ? `${payers} → ${memberName(b.shares[0]?.memberId ?? "")}` : t("bills.paidBy", { payers, who });
         const extras = [
           b.fx && `${formatMoney(b.fx.amount, b.fx.currency)} @ ${b.fx.rate}`,
-          b.recurrenceId && "repeating",
-          b.hasReceipt && "receipt",
+          b.recurrenceId && t("bills.repeating"),
+          b.hasReceipt && t("bills.receipt"),
+          b.commentCount > 0 && tn("bills.comments", b.commentCount),
         ].filter(Boolean).join(" · ");
-        const cat = isPayment ? { icon: "payments" as const, label: "Payment" } : CATEGORY_META[b.category];
-        items.push(h("md-list-item", { type: "button", onclick: () => editBill(b), dataset: { testid: "bill-item" }, "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}` },
+        const cat = isPayment ? { icon: "payments" as const, label: t("bill.payment") } : { icon: CATEGORY_META[b.category].icon, label: categoryLabel(b.category) };
+        items.push(h("md-list-item", { type: isView ? "text" : "button", onclick: () => editBill(b), dataset: { testid: "bill-item", billId: b.id }, "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}` },
           h("div", { slot: "start", class: `avatar ${isPayment ? "payment" : ""}`, title: cat.label }, icon(cat.icon)),
           h("div", { slot: "headline" }, b.description),
           h("div", { slot: "supporting-text" }, supporting, extras && h("span", { class: "extras" }, ` · ${extras}`)),
           h("div", { slot: "end", class: "bill-end" },
             h("div", { class: "md-typescale-title-small tabular" }, money(b.amount)),
-            mine !== null && !isPayment && h("div", { class: "md-typescale-body-small muted tabular", dataset: { testid: "bill-my-share" } }, mine ? `${memberName(viewAs!)} ${money(mine)}` : "not in"))));
+            mine !== null && !isPayment && h("div", { class: "md-typescale-body-small muted tabular", dataset: { testid: "bill-my-share" } }, mine ? `${memberName(viewAs!)} ${money(mine)}` : t("bills.notIn")))));
       }
-      clear(listHost, h("md-list", { dataset: { testid: "bills-list" }, "aria-label": "Bills" }, items));
+      clear(listHost, h("md-list", { dataset: { testid: "bills-list" }, "aria-label": t("tab.bills") }, items));
+      if (!readOnly()) {
+        const byId = new Map(state.bills.map((b) => [b.id, b]));
+        listHost.querySelectorAll<HTMLElement>("[data-bill-id]").forEach((row) => {
+          const b = byId.get(row.dataset.billId!);
+          if (b) attachRowGestures(row, { onSwipeLeft: () => swipeDelete(b), onLongPress: b.kind === "expense" ? () => duplicateBill(b) : undefined });
+        });
+      }
     }
     renderList();
 
-    return h("section", { class: "card flush", "aria-label": "Bills" },
+    return h("section", { class: "card flush", "aria-label": t("tab.bills") },
       head,
       h("div", { class: "bill-tools" }, search, catChips,
-        activeRec > 0 && h("md-assist-chip", { label: `${activeRec} repeating`, onclick: showRecurring, dataset: { testid: "recurring-chip" } })),
+        activeRec > 0 && h("md-assist-chip", { label: t("recurring.chip", { n: activeRec }), onclick: showRecurring, dataset: { testid: "recurring-chip" } })),
       listHost);
   }
 
@@ -368,12 +440,12 @@ export async function renderGroup(root: HTMLElement, gid: string) {
     const max = entries[0][1];
     const total = state.summary.total || 1;
     return h("section", { class: "card flush", "aria-labelledby": "cat-chart-title" },
-      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "cat-chart-title" }, "Spending by category")),
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "cat-chart-title" }, t("chart.byCategory"))),
       h("div", { class: "bar-chart", role: "list", dataset: { testid: "category-chart" } },
         entries.map(([c, v]) => {
           const pct = Math.round((v / total) * 100);
-          return h("div", { class: "bar-row", role: "listitem", title: `${CATEGORY_META[c].label}: ${money(v)} (${pct}%)`, dataset: { testid: `cat-bar-${c}` } },
-            h("div", { class: "bar-label md-typescale-body-medium" }, icon(CATEGORY_META[c].icon), CATEGORY_META[c].label),
+          return h("div", { class: "bar-row", role: "listitem", title: `${categoryLabel(c)}: ${money(v)} (${pct}%)`, dataset: { testid: `cat-bar-${c}` } },
+            h("div", { class: "bar-label md-typescale-body-medium" }, icon(CATEGORY_META[c].icon), categoryLabel(c)),
             h("div", { class: "bar-track", "aria-hidden": "true" }, h("div", { class: "bar-fill", style: `width:${Math.max(2, (v / max) * 100)}%` })),
             h("div", { class: "bar-value md-typescale-body-medium tabular" }, money(v), h("span", { class: "muted" }, ` ${pct}%`)));
         })));
@@ -387,26 +459,26 @@ export async function renderGroup(root: HTMLElement, gid: string) {
     const mineIn = state.summary.settlements.filter((s) => s.to === viewAs);
     const name = memberName(viewAs);
     return h("section", { class: `card my-card ${b.net > 0 ? "pos" : b.net < 0 ? "neg" : ""}`, dataset: { testid: "my-card" }, "aria-live": "polite" },
-      h("h2", { class: "md-typescale-title-medium" }, `${name}'s position`),
-      h("p", { class: "md-typescale-headline-small tabular" }, b.net > 0 ? `Gets back ${money(b.net)}` : b.net < 0 ? `Owes ${money(-b.net)}` : "All settled"),
-      h("p", { class: "md-typescale-body-medium muted tabular" }, `Spent ${money(b.paid)} · share of bills ${money(b.owed)}`),
-      mineOut.map((s) => h("p", { class: "md-typescale-body-large" }, `Pay ${memberName(s.to)} ${money(s.amount)}`)),
-      mineIn.map((s) => h("p", { class: "md-typescale-body-large" }, `${memberName(s.from)} pays you ${money(s.amount)}`)));
+      h("h2", { class: "md-typescale-title-medium" }, t("mycard.title", { name })),
+      h("p", { class: "md-typescale-headline-small tabular" }, b.net > 0 ? t("mycard.getsBack", { amount: money(b.net) }) : b.net < 0 ? t("mycard.owes", { amount: money(-b.net) }) : t("mycard.settled")),
+      h("p", { class: "md-typescale-body-medium muted tabular" }, t("mycard.spent", { paid: money(b.paid), owed: money(b.owed) })),
+      mineOut.map((s) => h("p", { class: "md-typescale-body-large" }, t("mycard.pay", { name: memberName(s.to), amount: money(s.amount) }))),
+      mineIn.map((s) => h("p", { class: "md-typescale-body-large" }, t("mycard.paysYou", { name: memberName(s.from), amount: money(s.amount) }))));
   }
 
   function summaryPanel() {
     const { summary } = state;
     const settlements = summary.settlements.length
-      ? h("md-list", { dataset: { testid: "settlements" }, "aria-label": "Who pays whom" },
+      ? h("md-list", { dataset: { testid: "settlements" }, "aria-label": t("summary.whoPays") },
           summary.settlements.map((s) => {
             const dim = viewAs && s.from !== viewAs && s.to !== viewAs;
             return h("md-list-item", { class: dim ? "dim" : "", dataset: { testid: "settlement" } },
-              h("div", { slot: "headline" }, h("strong", null, memberName(s.from)), " pays ", h("strong", null, memberName(s.to))),
+              h("div", { slot: "headline" }, h("strong", null, memberName(s.from)), t("summary.paysInfix"), h("strong", null, memberName(s.to))),
               h("div", { slot: "supporting-text", class: "md-typescale-title-medium amount-owed tabular" }, money(s.amount)),
               !readOnly() && h("md-filled-tonal-button", { slot: "end", onclick: () => addBill({ from: s.from, to: s.to, amount: s.amount }), dataset: { testid: "settle-btn" },
-                "aria-label": `Settle: ${memberName(s.from)} pays ${memberName(s.to)} ${money(s.amount)}` }, "Settle"));
+                "aria-label": t("summary.settleAria", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }) }, t("summary.settle")));
           }))
-      : h("div", { class: "settled", dataset: { testid: "all-settled" } }, icon("check_circle"), h("span", { class: "md-typescale-body-large" }, "All settled up"));
+      : h("div", { class: "settled", dataset: { testid: "all-settled" } }, icon("check_circle"), h("span", { class: "md-typescale-body-large" }, t("summary.allSettled")));
 
     // Custom rows (not md-list-item): its end slot squeezed and cut off amounts on phones.
     const balances = h("div", { class: "balances", dataset: { testid: "balances" }, role: "list" },
@@ -417,43 +489,171 @@ export async function renderGroup(root: HTMLElement, gid: string) {
             h("div", { class: "balance-top" },
               h("span", { class: "md-typescale-body-large balance-name" }, memberName(b.memberId)),
               h("span", { class: `md-typescale-title-small tabular net ${b.net > 0 ? "pos" : b.net < 0 ? "neg" : ""}`, dataset: { testid: "balance-net" } },
-                b.net > 0 ? `gets ${money(b.net)}` : b.net < 0 ? `owes ${money(-b.net)}` : "settled")),
+                b.net > 0 ? t("balance.gets", { amount: money(b.net) }) : b.net < 0 ? t("balance.owes", { amount: money(-b.net) }) : t("balance.settled"))),
             h("div", { class: "md-typescale-body-medium muted balance-detail", dataset: { testid: "balance-detail" } },
-              h("span", { class: "tabular" }, `Paid ${money(b.paid)}`),
-              h("span", { class: "tabular" }, `Share ${money(b.owed)}`))))));
+              h("span", { class: "tabular" }, t("balance.paid", { amount: money(b.paid) })),
+              h("span", { class: "tabular" }, t("balance.share", { amount: money(b.owed) })))))));
 
     return h("div", { class: "stack-lg" },
       myCard(),
-      h("section", { class: "card flush", "aria-labelledby": "pays-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, "Who pays whom")), settlements),
-      h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, "Balances")), balances),
-      categoryChart());
+      h("section", { class: "card flush", "aria-labelledby": "pays-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, t("summary.whoPays"))), settlements),
+      h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, t("summary.balances"))), balances),
+      categoryChart(),
+      settleHistory(),
+      statsMod && (() => {
+        const st = statsMod!.computeStats(state.bills, state.members);
+        return st ? statsMod!.statsCard(st, money, memberName) : null;
+      })());
+  }
+
+  function settleHistory() {
+    const pays = state.bills.filter((b) => b.kind === "payment");
+    if (!pays.length) return null;
+    const sum = pays.reduce((a, b) => a + b.amount, 0);
+    return h("section", { class: "card flush", "aria-labelledby": "settle-hist-title", dataset: { testid: "settle-history" } },
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "settle-hist-title" }, t("summary.history")),
+        h("span", { class: "md-typescale-body-medium muted" }, `${pays.length} · ${money(sum)}`)),
+      h("md-list", { "aria-label": t("summary.payments") }, pays.map((b) =>
+        h("md-list-item", { type: readOnly() ? "text" : "button", onclick: () => editBill(b), dataset: { testid: "settle-history-item" } },
+          icon("payments", "start"),
+          h("div", { slot: "headline" }, `${memberName(b.paidBy)} → ${memberName(b.shares[0]?.memberId ?? "")}`),
+          h("div", { slot: "supporting-text" }, formatDate(b.date)),
+          h("div", { slot: "end", class: "md-typescale-title-small tabular" }, money(b.amount))))));
+  }
+
+  // ---------- subgroups (#6) ----------
+  async function editSubgroup(sg: Subgroup | null) {
+    const sel = new Set(sg?.memberIds ?? []);
+    const name = h("md-outlined-text-field", { label: t("common.name"), value: sg?.name ?? "", maxLength: 40, dataset: { testid: "subgroup-name" } }) as Field;
+    const err = h("div", { class: "form-error", role: "alert" });
+    const d = h("md-dialog", { dataset: { testid: "subgroup-dialog" } },
+      h("div", { slot: "headline" }, sg ? t("subgroup.edit") : t("subgroup.new")),
+      h("div", { slot: "content", class: "stack" }, name,
+        h("div", { class: "split-list", role: "group", "aria-label": t("subgroup.members") }, state.members.map((m) =>
+          h("label", { class: "split-row" },
+            h("md-checkbox", { checked: sel.has(m.id), "aria-label": m.name, dataset: { testid: `subgroup-check-${m.name}` },
+              onchange: (e: Event) => ((e.target as HTMLElement & { checked: boolean }).checked ? sel.add(m.id) : sel.delete(m.id)) }),
+            h("span", { class: "grow" }, m.name)))),
+        err),
+      h("div", { slot: "actions" },
+        sg && h("md-text-button", { class: "danger push-left", dataset: { testid: "subgroup-delete" }, onclick: async () => {
+          await api.deleteSubgroup(gid, sg.id);
+          d.close("ok");
+        } }, t("common.delete")),
+        h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
+        h("md-filled-button", { dataset: { testid: "subgroup-save" }, onclick: async () => {
+          try {
+            await api.saveSubgroup(gid, { id: sg?.id, name: name.value, memberIds: state.members.filter((m) => sel.has(m.id)).map((m) => m.id) });
+            d.close("ok");
+          } catch (e) {
+            err.textContent = e instanceof Error ? e.message : t("common.saveFailed");
+          }
+        } }, t("common.save")))) as MdDialog;
+    if ((await openDialog(d)) === "ok") refresh();
+  }
+
+  function subgroupsPanel() {
+    if (isView) return null;
+    return h("section", { class: "card flush", "aria-labelledby": "subgroups-title", dataset: { testid: "subgroups" } },
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "subgroups-title" }, t("subgroup.title"))),
+      state.subgroups.length
+        ? h("md-list", { "aria-label": t("subgroup.title") }, state.subgroups.map((sg) =>
+            h("md-list-item", { type: readOnly() ? "text" : "button", onclick: () => !readOnly() && editSubgroup(sg), dataset: { testid: "subgroup-item" } },
+              icon("groups", "start"),
+              h("div", { slot: "headline" }, sg.name),
+              h("div", { slot: "supporting-text" }, sg.memberIds.map(memberName).join(", ")))))
+        : h("p", { class: "pad md-typescale-body-medium muted" }, t("subgroup.help")),
+      !readOnly() && h("div", { class: "row pad" },
+        h("md-text-button", { onclick: () => editSubgroup(null), dataset: { testid: "subgroup-add" } }, icon("add", "icon"), t("subgroup.new"))));
+  }
+
+  // ---------- read-only link (#12) + merge (#10) ----------
+  async function viewLinkSection() {
+    const host = h("div", { class: "stack-sm", dataset: { testid: "view-link-section" } });
+    const paint = (vid: string | null) => {
+      const url = vid ? `${location.origin}/v/${vid}` : null;
+      clear(host,
+        h("h2", { class: "md-typescale-title-small" }, t("view.title")),
+        h("p", { class: "md-typescale-body-small muted" }, url
+          ? t("view.help")
+          : t("view.helpNone")),
+        url && h("div", { class: "link-box md-typescale-body-small", dataset: { testid: "view-link-url" } }, url),
+        h("div", { class: "row wrap" },
+          url && h("md-outlined-button", { dataset: { testid: "view-link-copy" }, onclick: async () => {
+            try { await navigator.clipboard.writeText(url); snackbar(t("view.copied")); } catch { snackbar(url); }
+          } }, icon("content_copy", "icon"), t("common.copy")),
+          !state.group.archived && h("md-text-button", { dataset: { testid: url ? "view-link-rotate" : "view-link-create" }, onclick: async () => {
+            paint((await api.createViewLink(gid)).viewId);
+            snackbar(url ? t("view.rotated") : t("view.created"));
+          } }, url ? t("view.new") : t("view.create")),
+          url && h("md-text-button", { class: "danger", dataset: { testid: "view-link-revoke" }, onclick: async () => {
+            await api.revokeViewLink(gid);
+            paint(null);
+            snackbar(t("view.off"));
+          } }, t("view.turnOff"))));
+    };
+    paint(null);
+    api.viewLink(gid).then((r) => paint(r.viewId)).catch(() => {});
+    return host;
+  }
+
+  async function mergeFlow() {
+    const { pickGroupDialog, withMissingMembers } = await loadMove();
+    const source = await pickGroupDialog(
+      t("merge.title"),
+      t("merge.help", { currency: state.group.currency }),
+      gid, state.group.currency);
+    if (!source) return;
+    if (!(await confirmDialog(t("merge.confirmTitle"), t("merge.confirmText"), t("settings.merge")))) return;
+    try {
+      const r = await withMissingMembers((add) => api.merge(gid, source, add));
+      if (!r) return;
+      snackbar(tn("merge.done", r.moved) + (r.addedMembers.length ? t("merge.added", { names: r.addedMembers.join(", ") }) : ""));
+      refresh();
+    } catch (e) {
+      snackbar(e instanceof Error ? e.message : t("merge.failed"));
+    }
+  }
+
+  // ---------- first-visit tips (#17) ----------
+  function tipsBanner() {
+    if (readOnly() || local.get("share.tipsDismissed")) return null;
+    const el = h("section", { class: "tips card tonal", role: "note", dataset: { testid: "tips" } },
+      h("div", { class: "row" }, h("h2", { class: "md-typescale-title-small grow" }, t("tips.title")),
+        h("md-icon-button", { "aria-label": t("tips.dismiss"), dataset: { testid: "tips-dismiss" }, onclick: () => { local.set("share.tipsDismissed", "1"); el.remove(); } }, icon("close"))),
+      h("ul", { class: "md-typescale-body-medium" },
+        h("li", null, t("tips.1")),
+        h("li", null, t("tips.2")),
+        h("li", null, t("tips.3")),
+        h("li", null, t("tips.4"))));
+    return el;
   }
 
   function membersPanel() {
     return h("section", { class: "card flush", "aria-labelledby": "people-title" },
-      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "people-title" }, "People"), h("span", { class: "muted md-typescale-body-medium" }, String(state.members.length))),
-      h("md-list", { dataset: { testid: "members-list" }, "aria-label": "People" },
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "people-title" }, t("tab.members")), h("span", { class: "muted md-typescale-body-medium" }, String(state.members.length))),
+      h("md-list", { dataset: { testid: "members-list" }, "aria-label": t("tab.members") },
         state.members.map((m) =>
           h("md-list-item", { dataset: { testid: "member-item" } },
             h("div", { slot: "start", class: "avatar initial", "aria-hidden": "true" }, initial(m.name)),
             h("div", { slot: "headline" }, m.name),
             m.promptpay && h("div", { slot: "supporting-text" }, "PromptPay ✓"),
             !readOnly() && h("div", { slot: "end", class: "row tight" },
-              h("md-icon-button", { "aria-label": `Edit ${m.name}`, onclick: () => editMember(m), dataset: { testid: `edit-member-${m.name}` } }, icon("edit")),
+              h("md-icon-button", { "aria-label": t("member.edit", { name: m.name }), onclick: () => editMember(m), dataset: { testid: `edit-member-${m.name}` } }, icon("edit")),
               h("md-icon-button", {
-                "aria-label": `Remove ${m.name}`, dataset: { testid: `remove-member-${m.name}` },
+                "aria-label": t("member.removeAria", { name: m.name }), dataset: { testid: `remove-member-${m.name}` },
                 onclick: async () => {
-                  if (!(await confirmDialog(`Remove ${m.name}?`, "Only people without bills can be removed.", "Remove"))) return;
+                  if (!(await confirmDialog(t("member.removeTitle", { name: m.name }), t("member.removeText"), t("common.remove")))) return;
                   try {
                     await api.deleteMember(gid, m.id);
                     refresh();
                   } catch (e) {
-                    snackbar(e instanceof Error ? e.message : "Could not remove");
+                    snackbar(e instanceof Error ? e.message : t("member.removeFailed"));
                   }
                 },
               }, icon("person_remove")))))),
       !readOnly() && h("div", { class: "row pad" },
-        h("md-filled-tonal-button", { onclick: () => editMember(null), dataset: { testid: "add-member-btn" } }, icon("person_add", "icon"), "Add person")));
+        h("md-filled-tonal-button", { onclick: () => editMember(null), dataset: { testid: "add-member-btn" } }, icon("person_add", "icon"), t("member.add"))));
   }
 
   function activityPanel() {
@@ -464,22 +664,22 @@ export async function renderGroup(root: HTMLElement, gid: string) {
         ? h("ol", { class: "activity-list", dataset: { testid: "activity-list" } }, items.map((a) =>
             h("li", { class: "activity-item", dataset: { testid: "activity-item" } },
               h("div", { class: "activity-text md-typescale-body-medium" }, describe(a)),
-              h("div", { class: "md-typescale-body-small muted" }, `${a.actor ?? "someone"} · `, h("time", { dateTime: a.at }, relTime(a.at))),
+              h("div", { class: "md-typescale-body-small muted" }, `${a.actor ?? t("activity.someone")} · `, h("time", { dateTime: a.at }, relTime(a.at))),
               a.restorable && !readOnly() && h("md-text-button", { dataset: { testid: "activity-restore" }, onclick: async () => {
                 await api.restoreBill(gid, a.entityId!);
-                snackbar("Bill restored");
+                snackbar(t("bill.restored"));
                 refresh();
-              } }, icon("undo", "icon"), "Restore"))))
-        : h("p", { class: "pad muted" }, "No activity yet."),
+              } }, icon("undo", "icon"), t("common.restore")))))
+        : h("p", { class: "pad muted" }, t("activity.none")),
       items.length >= 50 && h("div", { class: "row pad" }, h("md-text-button", { onclick: async () => {
         const more = await api.activity(gid, items[items.length - 1].at);
         items = [...items, ...more.activity];
         render();
-      } }, "Load more")));
+      } }, t("activity.more"))));
     render();
     return h("section", { class: "card flush", "aria-labelledby": "act-title" },
-      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "act-title" }, "Activity"),
-        h("md-text-button", { onclick: showRecurring, dataset: { testid: "open-recurring" } }, icon("repeat", "icon"), "Repeating")),
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "act-title" }, t("tab.activity")),
+        h("md-text-button", { onclick: showRecurring, dataset: { testid: "open-recurring" } }, icon("repeat", "icon"), t("recurring.short"))),
       host);
   }
 
@@ -488,32 +688,39 @@ export async function renderGroup(root: HTMLElement, gid: string) {
     const desc = typeof d.description === "string" ? `“${d.description}”` : "";
     const amt = typeof d.amount === "number" ? ` ${money(d.amount)}` : "";
     const nm = (k: string) => (typeof d[k] === "string" ? String(d[k]) : "");
+    const dd = { desc, amt };
     switch (a.action) {
-      case "group.create": return "Created the group";
-      case "group.rename": return `Renamed the group to “${nm("to")}”`;
-      case "group.currency": return `Changed currency ${nm("from")} → ${nm("to")}`;
-      case "group.archive": return "Archived the group";
-      case "group.unarchive": return "Unarchived the group";
-      case "member.add": return `Added ${nm("name")}`;
-      case "member.rename": return `Renamed ${nm("from")} to ${nm("to")}`;
-      case "member.promptpay": return `${d.set ? "Set" : "Removed"} PromptPay for ${nm("name")}`;
-      case "member.remove": return `Removed ${nm("name")}`;
-      case "bill.create": return `${d.kind === "payment" ? "Recorded payment" : "Added"} ${desc}${amt}`;
-      case "bill.update": return `Edited ${desc}${amt}`;
-      case "bill.delete": return `Deleted ${desc}${amt}`;
-      case "bill.restore": return `Restored ${desc}${amt}`;
-      case "bill.recurring": return `Repeating bill added ${desc}${amt}`;
-      case "receipt.add": return `Attached a receipt to ${desc}`;
-      case "receipt.remove": return `Removed the receipt from ${desc}`;
-      case "recurring.create": return `Set ${desc} to repeat ${d.frequency === "weekly" ? "weekly" : "monthly"}`;
-      case "recurring.stop": return `Stopped repeating ${desc}`;
+      case "group.create": return t("act.groupCreate");
+      case "group.rename": return t("act.groupRename", { to: nm("to") });
+      case "group.currency": return t("act.groupCurrency", { from: nm("from"), to: nm("to") });
+      case "group.archive": return t("act.groupArchive");
+      case "group.unarchive": return t("act.groupUnarchive");
+      case "member.add": return t("act.memberAdd", { name: nm("name") });
+      case "member.rename": return t("act.memberRename", { from: nm("from"), to: nm("to") });
+      case "member.promptpay": return t(d.set ? "act.promptpaySet" : "act.promptpayRemoved", { name: nm("name") });
+      case "member.remove": return t("act.memberRemove", { name: nm("name") });
+      case "bill.create": return t(d.kind === "payment" ? "act.paymentCreate" : "act.billCreate", dd);
+      case "bill.update": return t("act.billUpdate", dd);
+      case "bill.delete": return t("act.billDelete", dd);
+      case "bill.restore": return t("act.billRestore", dd);
+      case "bill.recurring": return t("act.billRecurring", dd);
+      case "receipt.add": return t("act.receiptAdd", { desc });
+      case "receipt.remove": return t("act.receiptRemove", { desc });
+      case "recurring.create": return t(d.frequency === "weekly" ? "act.recurringWeekly" : "act.recurringMonthly", { desc });
+      case "recurring.stop": return t("act.recurringStop", { desc });
+      case "comment.add": return t("act.commentAdd", { desc, excerpt: nm("excerpt") });
+      case "viewlink.create": return t("act.viewCreate");
+      case "viewlink.revoke": return t("act.viewRevoke");
+      case "bill.moveOut": return t("act.moveOut", { ...dd, to: nm("to") });
+      case "bill.moveIn": return t("act.moveIn", { ...dd, from: nm("from") });
+      case "group.merge": return t("act.merge", { from: nm("from"), bills: String(d.bills ?? "") });
       default: return a.action;
     }
   }
 
   function viewAsSelect() {
-    const sel = h("md-outlined-select", { quick: true, label: "View as", class: "view-as", dataset: { testid: "view-as" } },
-      h("md-select-option", { value: "all", selected: !viewAs }, h("div", { slot: "headline" }, "Everyone")),
+    const sel = h("md-outlined-select", { quick: true, label: t("viewAs.label"), class: "view-as", dataset: { testid: "view-as" } },
+      h("md-select-option", { value: "all", selected: !viewAs }, h("div", { slot: "headline" }, t("common.everyone"))),
       state.members.map((m) => h("md-select-option", { value: m.id, selected: viewAs === m.id }, h("div", { slot: "headline" }, m.name)))) as HTMLElement & { value: string };
     sel.addEventListener("change", () => {
       viewAs = sel.value === "all" ? null : sel.value;
@@ -529,11 +736,11 @@ export async function renderGroup(root: HTMLElement, gid: string) {
   function render() {
     const focusId = (document.activeElement as HTMLElement | null)?.dataset?.testid;
     document.title = `${state.group.name} — Share`;
-    const tabs = h("md-tabs", { class: "group-tabs", activeTabIndex: TABS.indexOf(tab), "aria-label": "Sections", dataset: { testid: "tabs" } },
-      h("md-primary-tab", { dataset: { testid: "tab-bills" }, "aria-controls": "panel-bills" }, icon("receipt_long", "icon"), "Bills"),
-      h("md-primary-tab", { dataset: { testid: "tab-summary" }, "aria-controls": "panel-summary" }, icon("account_balance_wallet", "icon"), "Summary"),
-      h("md-primary-tab", { dataset: { testid: "tab-members" }, "aria-controls": "panel-members" }, icon("group", "icon"), "People"),
-      h("md-primary-tab", { dataset: { testid: "tab-activity" }, "aria-controls": "panel-activity" }, icon("history", "icon"), "Activity"));
+    const tabs = h("md-tabs", { class: "group-tabs", activeTabIndex: TABS.indexOf(tab), "aria-label": t("group.sections"), dataset: { testid: "tabs" } },
+      h("md-primary-tab", { dataset: { testid: "tab-bills" }, "aria-controls": "panel-bills" }, icon("receipt_long", "icon"), t("tab.bills")),
+      h("md-primary-tab", { dataset: { testid: "tab-summary" }, "aria-controls": "panel-summary" }, icon("account_balance_wallet", "icon"), t("tab.summary")),
+      h("md-primary-tab", { dataset: { testid: "tab-members" }, "aria-controls": "panel-members" }, icon("group", "icon"), t("tab.members")),
+      !isView && h("md-primary-tab", { dataset: { testid: "tab-activity" }, "aria-controls": "panel-activity" }, icon("history", "icon"), t("tab.activity")));
     tabs.addEventListener("change", () => {
       tab = TABS[(tabs as unknown as { activeTabIndex: number }).activeTabIndex];
       session.set(`tab:${gid}`, tab);
@@ -541,48 +748,58 @@ export async function renderGroup(root: HTMLElement, gid: string) {
       window.scrollTo(0, 0);
     });
 
-    const panel = (id: Tab, body: Node) => h("div", { class: `panel panel-${id}`, id: `panel-${id}`, role: "tabpanel", "aria-label": id }, body);
+    const panel = (id: Tab, body: Node) => h("div", { class: `panel panel-${id}`, id: `panel-${id}`, role: "tabpanel", "aria-label": t(`tab.${id}`) }, body);
     const layout = h("main", { class: "page group-layout", dataset: { tab }, id: "main" },
-      readOnly() && h("div", { class: "banner", role: "status", dataset: { testid: "archived-banner" } },
-        icon("archive"), h("span", { class: "grow" }, "This group is archived and read-only."),
-        h("md-text-button", { onclick: async () => { await api.updateGroup(gid, { archived: false }); snackbar("Group unarchived"); refresh(); }, dataset: { testid: "banner-unarchive" } }, "Unarchive")),
+      isView && h("div", { class: "banner", role: "status", dataset: { testid: "view-banner" } },
+        icon("info"), h("span", { class: "grow" }, t("group.viewBanner"))),
+      !isView && readOnly() && h("div", { class: "banner", role: "status", dataset: { testid: "archived-banner" } },
+        icon("archive"), h("span", { class: "grow" }, t("group.archivedBanner")),
+        h("md-text-button", { onclick: async () => { await api.updateGroup(gid, { archived: false }); snackbar("Group unarchived"); refresh(); }, dataset: { testid: "banner-unarchive" } }, t("settings.unarchive"))),
+      tipsBanner(),
       h("div", { class: "toolbar" }, viewAsSelect()),
       panel("bills", billsPanel()),
       panel("summary", summaryPanel()),
-      panel("members", membersPanel()),
-      panel("activity", activityPanel()));
+      panel("members", h("div", { class: "stack-lg" }, membersPanel(), subgroupsPanel())),
+      !isView && panel("activity", activityPanel()));
 
     clear(root,
-      h("a", { class: "skip-link", href: "#main" }, "Skip to content"),
-      appBar(state.group.name, [
-        h("md-icon-button", { "aria-label": "Share link", onclick: share, dataset: { testid: "share-link" } }, icon("share")),
+      h("a", { class: "skip-link", href: "#main" }, t("group.skip")),
+      appBar(state.group.name, isView ? [] : [
+        h("md-icon-button", { "aria-label": t("group.shareLink"), onclick: share, dataset: { testid: "share-link" } }, icon("share")),
         ...overflowMenu(),
       ]),
+      pullIndicator,
       tabs,
       layout,
-      !readOnly() && h("md-fab", { class: "fab narrow-only", variant: "primary", label: "Add bill", "aria-label": "Add bill", onclick: () => addBill(), dataset: { testid: "add-bill" } },
+      !readOnly() && h("md-fab", { class: "fab narrow-only", variant: "primary", label: t("bill.add"), "aria-label": t("bill.add"), onclick: () => addBill(), dataset: { testid: "add-bill" } },
         icon("add", "icon")),
       printView());
     if (focusId) root.querySelector<HTMLElement>(`[data-testid="${focusId}"]`)?.focus();
   }
+
+  const pullIndicator = h("div", { class: "pull-indicator", "aria-hidden": "true" }, icon("undo"));
+  attachPullToRefresh(pullIndicator, async () => {
+    await refresh();
+    snackbar(t("group.upToDate"));
+  });
 
   /** Print-only report (hidden on screen): bills table + balances + settlements. */
   function printView() {
     const cur = state.group.currency;
     return h("section", { class: "print-only", "aria-hidden": "true" },
       h("h1", null, state.group.name),
-      h("p", null, `Printed ${new Date().toLocaleString()} · Total ${money(state.summary.total)} · ${cur}`),
-      h("h2", null, "Who pays whom"),
+      h("p", null, t("print.header", { date: new Date().toLocaleString(locale()), total: money(state.summary.total), cur })),
+      h("h2", null, t("summary.whoPays")),
       state.summary.settlements.length
-        ? h("ul", null, state.summary.settlements.map((s) => h("li", null, `${memberName(s.from)} pays ${memberName(s.to)} ${money(s.amount)}`)))
-        : h("p", null, "All settled up."),
-      h("h2", null, "Balances"),
-      h("table", null, h("thead", null, h("tr", null, ["Person", "Paid", "Share", "Net"].map((x) => h("th", null, x)))),
+        ? h("ul", null, state.summary.settlements.map((s) => h("li", null, t("print.pays", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }))))
+        : h("p", null, t("print.settled")),
+      h("h2", null, t("summary.balances")),
+      h("table", null, h("thead", null, h("tr", null, [t("print.person"), t("print.paid"), t("print.share"), t("print.net")].map((x) => h("th", null, x)))),
         h("tbody", null, state.summary.balances.map((b) => h("tr", null, h("td", null, memberName(b.memberId)), h("td", null, money(b.paid)), h("td", null, money(b.owed)), h("td", null, money(b.net)))))),
-      h("h2", null, "Bills"),
-      h("table", null, h("thead", null, h("tr", null, ["Date", "Description", "Category", "Paid by", "Amount"].map((x) => h("th", null, x)))),
+      h("h2", null, t("tab.bills")),
+      h("table", null, h("thead", null, h("tr", null, [t("print.date"), t("print.description"), t("print.category"), t("print.paidBy"), t("print.amount")].map((x) => h("th", null, x)))),
         h("tbody", null, state.bills.map((b) => h("tr", null,
-          h("td", null, b.date), h("td", null, b.description), h("td", null, b.kind === "payment" ? "Payment" : CATEGORY_META[b.category].label),
+          h("td", null, b.date), h("td", null, b.description), h("td", null, b.kind === "payment" ? t("bill.payment") : categoryLabel(b.category)),
           h("td", null, b.payers.map((p) => memberName(p.memberId)).join(" & ")), h("td", null, money(b.amount)))))));
   }
 
@@ -595,17 +812,17 @@ function initial(name: string) {
 
 function formatDate(iso: string) {
   const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  return new Date(y, m - 1, d).toLocaleDateString(locale(), { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
 function relTime(iso: string) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
   if (s < 60) return rtf.format(-Math.round(s), "second");
   if (s < 3600) return rtf.format(-Math.round(s / 60), "minute");
   if (s < 86400) return rtf.format(-Math.round(s / 3600), "hour");
   if (s < 86400 * 7) return rtf.format(-Math.round(s / 86400), "day");
-  return new Date(iso).toLocaleDateString();
+  return new Date(iso).toLocaleDateString(locale());
 }
 
 const wrap = (s: () => Storage) => ({

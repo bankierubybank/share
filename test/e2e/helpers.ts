@@ -3,7 +3,7 @@ import { expect } from "./fixtures";
 
 export const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-export const field = (page: Page, testid: string) => page.getByTestId(testid).filter({ visible: true }).first().locator("input");
+export const field = (page: Page, testid: string) => page.getByTestId(testid).filter({ visible: true }).first().locator("input, textarea");
 
 export async function fill(page: Page, testid: string, value: string) {
   await field(page, testid).fill(value);

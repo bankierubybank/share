@@ -4,28 +4,30 @@ import { CURRENCIES, defaultCurrency } from "../money";
 import { forgetGroup, recentGroups } from "../store";
 import { navigate } from "../router";
 import { themeButton } from "../theme";
+import { dispatch } from "../router";
+import { lang, setLang, t } from "../i18n";
 
 type TextField = HTMLElement & { value: string; error: boolean; errorText: string; reportValidity(): boolean };
 
 export function renderHome(root: HTMLElement) {
-  document.title = "Share — split bills";
+  document.title = t("home.title");
   const members: string[] = [];
 
   const nameField = h("md-outlined-text-field", {
-    label: "Group name",
-    placeholder: "Bangkok trip, Flat 4B…",
+    label: t("home.groupName"),
+    placeholder: t("home.groupNamePh"),
     required: true,
     maxLength: 60,
     dataset: { testid: "group-name" },
   }) as TextField;
 
-  const currency = h("md-outlined-select", { quick: true, label: "Currency", dataset: { testid: "group-currency" } },
+  const currency = h("md-outlined-select", { quick: true, label: t("home.currency"), dataset: { testid: "group-currency" } },
     CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === defaultCurrency() }, h("div", { slot: "headline" }, c))),
   ) as HTMLElement & { value: string };
 
   const memberField = h("md-outlined-text-field", {
-    label: "Add person",
-    placeholder: "Name",
+    label: t("member.add"),
+    placeholder: t("common.name"),
     maxLength: 60,
     dataset: { testid: "member-input" },
     onkeydown: (e: KeyboardEvent) => {
@@ -36,7 +38,7 @@ export function renderHome(root: HTMLElement) {
     },
   }) as TextField;
   memberField.append(
-    h("md-icon-button", { type: "button", slot: "trailing-icon", "aria-label": "Add person", onclick: () => addMember(), dataset: { testid: "member-add" } }, icon("person_add")),
+    h("md-icon-button", { type: "button", slot: "trailing-icon", "aria-label": t("member.add"), onclick: () => addMember(), dataset: { testid: "member-add" } }, icon("person_add")),
   );
 
   const chips = h("md-chip-set", { class: "member-chips", dataset: { testid: "member-chips" } });
@@ -63,12 +65,12 @@ export function renderHome(root: HTMLElement) {
     if (!name) return false;
     if (members.some((m) => m.toLowerCase() === name.toLowerCase())) {
       memberField.error = true;
-      memberField.errorText = "Already added";
+      memberField.errorText = t("home.alreadyAdded");
       return false;
     }
     if (members.length >= 50) {
       memberField.error = true;
-      memberField.errorText = "At most 50 people";
+      memberField.errorText = t("home.atMost50");
       return false;
     }
     members.push(name);
@@ -81,7 +83,7 @@ export function renderHome(root: HTMLElement) {
     "md-filled-button",
     { type: "submit", dataset: { testid: "create-group" } },
     icon("group_add", "icon"),
-    "Create group",
+    t("home.createGroup"),
   ) as HTMLElement & { disabled: boolean };
 
   const form = h(
@@ -95,13 +97,13 @@ export function renderHome(root: HTMLElement) {
         nameField.error = false;
         if (!nameField.value.trim()) {
           nameField.error = true;
-          nameField.errorText = "Give the group a name";
+          nameField.errorText = t("home.nameRequired");
           nameField.focus();
           return;
         }
         if (!members.length) {
           memberField.error = true;
-          memberField.errorText = "Add at least one person";
+          memberField.errorText = t("home.addAtLeastOne");
           memberField.focus();
           return;
         }
@@ -110,7 +112,7 @@ export function renderHome(root: HTMLElement) {
           const { group } = await api.createGroup(nameField.value.trim(), currency.value || "USD", members);
           navigate(`/g/${group.id}`);
         } catch (err) {
-          snackbar(err instanceof ApiError ? err.message : "Could not create group");
+          snackbar(err instanceof ApiError ? err.message : t("home.createFailed"));
         } finally {
           createBtn.disabled = false;
         }
@@ -132,13 +134,13 @@ export function renderHome(root: HTMLElement) {
         "md-list-item",
         { type: "link", href: `/g/${g.id}`, onclick: (e: Event) => { e.preventDefault(); navigate(`/g/${g.id}`); } },
         h("div", { slot: "headline" }, g.name),
-        h("div", { slot: "supporting-text" }, g.archived ? `${g.currency} · Archived` : g.currency),
+        h("div", { slot: "supporting-text" }, g.archived ? t("home.archivedLine", { currency: g.currency }) : g.currency),
         icon(g.archived ? "archive" : "groups", "start"),
         h(
           "md-icon-button",
           {
             slot: "end",
-            "aria-label": `Remove ${g.name} from this list`,
+            "aria-label": t("home.removeFromList", { name: g.name }),
             onclick: (e: Event) => {
               e.preventDefault();
               e.stopPropagation();
@@ -158,7 +160,12 @@ export function renderHome(root: HTMLElement) {
       "header",
       { class: "top-app-bar" },
       h("div", { class: "brand" }, icon("receipt_long"), h("span", { class: "md-typescale-title-large" }, "Share")),
-      h("div", { class: "actions push-right" }, themeButton()),
+      h("div", { class: "actions push-right" },
+        h("md-text-button", {
+          "aria-label": t("lang.switchAria"), title: t("lang.switchAria"), dataset: { testid: "lang-toggle-home" },
+          onclick: () => { setLang(lang() === "th" ? "en" : "th"); dispatch(); },
+        }, icon("translate", "icon"), t("lang.switchTo")),
+        themeButton()),
     ),
     h(
       "main",
@@ -166,27 +173,41 @@ export function renderHome(root: HTMLElement) {
       h(
         "section",
         { class: "hero" },
-        h("h1", { class: "md-typescale-display-small" }, "Split bills, not friendships"),
-        h("p", { class: "md-typescale-body-large muted" }, "Create a group, add who's in, log what was paid. Share works out who owes whom."),
+        h("h1", { class: "md-typescale-display-small" }, t("home.heroTitle")),
+        h("p", { class: "md-typescale-body-large muted" }, t("home.heroText")),
       ),
       h(
         "div",
         { class: "home-grid" },
-        h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, "New group"), form),
+        h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, t("home.newGroup")), form),
         recent.length
-          ? h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, "Your groups"), recentList)
+          ? h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, t("common.yourGroups")), recentList)
           : h(
               "section",
               { class: "card tonal" },
-              h("h2", { class: "md-typescale-title-medium" }, "How it works"),
+              h("h2", { class: "md-typescale-title-medium" }, t("home.howItWorks")),
               h(
                 "ol",
                 { class: "how md-typescale-body-medium" },
-                h("li", null, "Create a group and add people."),
-                h("li", null, "Add bills: who paid, who shares."),
-                h("li", null, "Check Summary for who pays whom."),
-                h("li", null, "Share the link with your group."),
+                h("li", null, t("home.how1")),
+                h("li", null, t("home.how2")),
+                h("li", null, t("home.how3")),
+                h("li", null, t("home.how4")),
               ),
+              h("md-filled-tonal-button", {
+                dataset: { testid: "try-sample" },
+                onclick: async (e: Event) => {
+                  const btn = e.currentTarget as HTMLElement & { disabled: boolean };
+                  btn.disabled = true;
+                  try {
+                    const { createSampleGroup } = await import("../sample");
+                    navigate(`/g/${await createSampleGroup()}`);
+                  } catch (err) {
+                    snackbar(err instanceof ApiError ? err.message : t("home.sampleFailed"));
+                    btn.disabled = false;
+                  }
+                },
+              }, icon("local_activity", "icon"), t("home.trySample")),
             ),
       ),
     ),

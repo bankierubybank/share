@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0 — 2026-10-26 (deployed, version 0fc167c6)
+
+Backlog picks #4, 6, 8, 10, 11, 12, 14, 16, 17, 18 (second round).
+
+### Added
+- **Comments on bills** (#4): thread per bill (500 chars, newlines kept), author = "View as" person or Access email,
+  count shown in the bill list, activity entry.
+- **Subgroups + quick picks** (#6): save "Couple", "Room 2"…; one tap in the equal split: Everyone / No one / subgroup.
+- **Partial settle-up + history** (#8): Settle dialog has Full / Half and accepts any smaller amount (the rest stays
+  in Who pays whom); Summary lists every payment ("Settle-up history").
+- **Move a bill / merge groups** (#10): people matched by name (case-insensitive), missing people added on confirm,
+  same currency required; merge moves all live bills, stops the source's repeating bills and archives it.
+- **Trip stats** (#11): days, per day, per person per day, top payer, biggest bill, spend-per-day bars.
+- **Read-only link** (#12): separate random view id (`/v/<id>`) — create / rotate / turn off in Group settings.
+  View shows bills, balances, stats; never the edit id, PromptPay numbers, receipts, activity or who added what.
+- **Thai / English** (#14): every UI string translated; switch on home and in the group menu; Thai by default for
+  Thai browsers; dates and numbers formatted per language.
+- **Gestures** (#16): swipe a bill left to delete (with Undo), long-press to duplicate, pull down to refresh; a
+  Duplicate button covers the same for keyboard / screen-reader users.
+- **Onboarding** (#17): "Try with sample data" on an empty home; dismissible quick tips on the first group visit.
+- **Smaller bundle** (#18): group view, bill dialog, stats, export, move and sample are lazy chunks; group-only
+  Material components moved out of the entry. Home JS 405 KB → 273 KB (gzip 92 → 62 KB).
+- Migration `0003_social` (additive), API v3 (docs/API.md), backups include comments + subgroups.
+
+### Fixed (found by tests / review)
+- **Security:** merge logged the source group's id in the target's activity — anyone with the target link could
+  learn the source's edit id. Now logged without an entity id (found by Sonnet's security suite).
+- Comment length counted UTF-16 units (250 emoji max); now code points.
+- Read-only view still showed the laptop "Add bill" button.
+- Duplicate opened the new dialog while the old one was still closing (two dialogs on screen).
+- Revoking a read-only link is allowed while the group is archived.
+
 ## 0.2.0 — 2026-10-26 (deployed, version f3e6d320)
 
 Backlog items #1–15, 17, 20, 21, 23, 25 (see PROGRESS.md for the list).

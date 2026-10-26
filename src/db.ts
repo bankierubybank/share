@@ -33,6 +33,7 @@ export interface Bill {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  commentCount: number;
 }
 export interface Activity {
   id: string;
@@ -58,12 +59,12 @@ interface BillRow {
   id: string; kind: "expense" | "payment"; description: string; amount: number; paid_by: string; date: string;
   split_mode: SplitMode; split_json: string | null; category: string; original_currency: string | null;
   original_amount: number | null; fx_rate: string | null; receipt_key: string | null; recurrence_id: string | null;
-  created_by: string | null; created_at: string; updated_at: string;
+  created_by: string | null; created_at: string; updated_at: string; comment_count: number;
 }
 interface ShareRow { bill_id: string; member_id: string; amount: number }
 
 const BILL_COLS =
-  "b.id, b.kind, b.description, b.amount, b.paid_by, b.date, b.split_mode, b.split_json, b.category, b.original_currency, b.original_amount, b.fx_rate, b.receipt_key, b.recurrence_id, b.created_by, b.created_at, b.updated_at";
+  "(SELECT count(*) FROM bill_comments c WHERE c.bill_id = b.id) AS comment_count, b.id, b.kind, b.description, b.amount, b.paid_by, b.date, b.split_mode, b.split_json, b.category, b.original_currency, b.original_amount, b.fx_rate, b.receipt_key, b.recurrence_id, b.created_by, b.created_at, b.updated_at";
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 const toGroup = (r: GroupRow): Group => ({
@@ -100,6 +101,7 @@ function toBill(b: BillRow, shares: Share[], payers: Share[]): Bill {
     createdBy: b.created_by,
     createdAt: b.created_at,
     updatedAt: b.updated_at,
+    commentCount: b.comment_count ?? 0,
   };
 }
 

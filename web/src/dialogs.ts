@@ -1,4 +1,5 @@
 import { h } from "./dom";
+import { t } from "./i18n";
 
 export type MdDialog = HTMLElement & { open: boolean; returnValue: string; show(): Promise<void>; close(v?: string): Promise<void> };
 
@@ -17,7 +18,7 @@ export function openDialog(dialog: MdDialog): Promise<string> {
   });
 }
 
-export async function confirmDialog(title: string, text: string, confirmLabel = "Delete"): Promise<boolean> {
+export async function confirmDialog(title: string, text: string, confirmLabel = t("common.delete")): Promise<boolean> {
   const d = h(
     "md-dialog",
     { dataset: { testid: "confirm-dialog" } },
@@ -26,7 +27,7 @@ export async function confirmDialog(title: string, text: string, confirmLabel = 
     h(
       "div",
       { slot: "actions" },
-      h("md-text-button", { onclick: () => d.close("cancel") }, "Cancel"),
+      h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
       h("md-filled-tonal-button", { onclick: () => d.close("ok"), dataset: { testid: "confirm-ok" } }, confirmLabel),
     ),
   ) as MdDialog;
@@ -47,7 +48,7 @@ export async function promptDialog(
     const v = field.value.trim();
     if (!v) {
       field.error = true;
-      field.errorText = "Required";
+      field.errorText = t("common.required");
       return;
     }
     const err = await submit(v);
@@ -70,8 +71,8 @@ export async function promptDialog(
     h(
       "div",
       { slot: "actions" },
-      h("md-text-button", { onclick: () => d.close("cancel") }, "Cancel"),
-      h("md-filled-button", { onclick: save, dataset: { testid: "prompt-save" } }, "Save"),
+      h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
+      h("md-filled-button", { onclick: save, dataset: { testid: "prompt-save" } }, t("common.save")),
     ),
   ) as MdDialog;
   d.addEventListener("opened", () => field.focus(), { once: true });

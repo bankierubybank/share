@@ -17,7 +17,17 @@ export interface Fx { currency: string; amount: number; rate: string }
 export interface Bill {
   id: string; kind: BillKind; description: string; amount: number; paidBy: string; payers: Share[]; date: string;
   category: Category; splitMode: SplitMode; split: Split; shares: Share[]; fx: Fx | null; hasReceipt: boolean;
-  recurrenceId: string | null; createdBy: string | null; createdAt: string; updatedAt: string;
+  recurrenceId: string | null; createdBy: string | null; createdAt: string; updatedAt: string; commentCount: number;
+}
+export interface Comment { id: string; billId: string; authorMemberId: string | null; actor: string | null; body: string; createdAt: string }
+export interface Subgroup { id: string; name: string; memberIds: string[] }
+/** Read-only snapshot from a view link: no group id (the edit secret), trimmed fields. */
+export interface ViewSnapshot {
+  group: Omit<Group, "id">;
+  members: Omit<Member, "promptpay">[];
+  bills: Omit<Bill, "createdBy" | "hasReceipt" | "recurrenceId">[];
+  summary: Summary;
+  readOnly: true;
 }
 export interface BillInput {
   kind: BillKind; description: string; amount?: number; date: string; category: Category; split: Split;
@@ -36,7 +46,7 @@ export interface Recurrence {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  constructor(public status: number, public code: string, message: string, public missing?: string[]) {
     super(message);
   }
 }
@@ -57,7 +67,7 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { body
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const err = data?.error;
-    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`);
+    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.missing);
   }
   return data as T;
 }
@@ -95,4 +105,28 @@ export const api = {
   createRecurring: (gid: string, frequency: "weekly" | "monthly", startDate: string, bill: Omit<BillInput, "date">) =>
     req<{ recurring: Recurrence; created: number }>("POST", `${g(gid)}/recurring`, { frequency, startDate, bill }),
   stopRecurring: (gid: string, rid: string) => req<void>("DELETE", `${g(gid)}/recurring/${encodeURIComponent(rid)}`),
+  comments: (gid: string, bid: string) => req<{ comments: Comment[] }>("GET", `${b(gid, bid)}/comments`),
+  addComment: (gid: string, bid: string, body: string, memberId?: string | null) =>
+    req<{ comment: Comment }>("POST", `${b(gid, bid)}/comments`, { body, ...(memberId ? { memberId } : {}) }),
+  deleteComment: (gid: string, bid: string, cid: string) => req<void>("DELETE", `${b(gid, bid)}/comments/${encodeURIComponent(cid)}`),
+  subgroups: (gid: string) => req<{ subgroups: Subgroup[] }>("GET", `${g(gid)}/subgroups`),
+  saveSubgroup: (gid: string, sub: { id?: string; name: string; memberIds: string[] }) =>
+    sub.id
+      ? req<{ subgroup: Subgroup }>("PUT", `${g(gid)}/subgroups/${encodeURIComponent(sub.id)}`, { name: sub.name, memberIds: sub.memberIds })
+      : req<{ subgroup: Subgroup }>("POST", `${g(gid)}/subgroups`, { name: sub.name, memberIds: sub.memberIds }),
+  deleteSubgroup: (gid: string, sid: string) => req<void>("DELETE", `${g(gid)}/subgroups/${encodeURIComponent(sid)}`),
+  viewLink: (gid: string) => req<{ viewId: string | null }>("GET", `${g(gid)}/view-link`),
+  createViewLink: (gid: string) => req<{ viewId: string }>("POST", `${g(gid)}/view-link`, {}),
+  revokeViewLink: (gid: string) => req<void>("DELETE", `${g(gid)}/view-link`),
+  view: (vid: string) => req<ViewSnapshot>("GET", `/view/${encodeURIComponent(vid)}`),
+  moveBill: (gid: string, bid: string, targetGroupId: string, addMissingMembers = false) =>
+    req<{ bill: Bill; targetGroupId: string; addedMembers: string[] }>("POST", `${b(gid, bid)}/move`, { targetGroupId, addMissingMembers }),
+  merge: (gid: string, sourceGroupId: string, addMissingMembers = false) =>
+    req<{ moved: number; addedMembers: string[]; sourceArchived: boolean }>("POST", `${g(gid)}/merge`, { sourceGroupId, addMissingMembers }),
 };
+
+/** Accepts a pasted group link (…/g/<id>) or a bare id. */
+export function parseGroupRef(input: string): string | null {
+  const m = input.trim().match(/(?:\/g\/)?([A-Za-z0-9_-]{22})(?:[/?#].*)?$/);
+  return m ? m[1] : null;
+}

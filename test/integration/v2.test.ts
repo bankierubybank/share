@@ -1,8 +1,8 @@
 import { exports } from "cloudflare:workers";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { runBackup } from "../../src/backup";
-import { scheduledMaintenance } from "../../src/routes";
+import { BACKUP_TABLES, runBackup } from "../../src/backup";
+import { scheduledMaintenance, VERSION } from "../../src/routes";
 
 // v2 features: archive, delete group, PromptPay, soft delete/restore, activity, split modes, multi-payer, fx,
 // categories, receipts, recurring bills, nightly backup and maintenance.
@@ -97,9 +97,9 @@ const receiptCount = async (gid: string) => (await env.RECEIPTS.list({ prefix: `
 // ============================================================================
 
 describe("health and identity", () => {
-  it("reports version 0.2.0", async () => {
+  it("reports the app version", async () => {
     const r = await call("GET", "/api/health");
-    expect(r.json).toEqual({ ok: true, version: "0.2.0" });
+    expect(r.json).toEqual({ ok: true, version: VERSION });
   });
 
   it("/api/me: null without headers, email (lowercased) from header, service token and JWT email from assertion", async () => {
@@ -1245,7 +1245,7 @@ describe("backup", () => {
     const { file, meta, httpMetadata } = await gunzipJson(key);
     expect(file.version).toBe(1);
     expect(file.createdAt).toBe("2031-03-05T10:20:30.000Z");
-    expect(Object.keys(file.tables)).toEqual(["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences"]);
+    expect(Object.keys(file.tables)).toEqual([...BACKUP_TABLES]);
     let total = 0;
     for (const [t, list] of Object.entries<any[]>(file.tables)) {
       expect(list.length, t).toBe(await count(t));

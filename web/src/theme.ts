@@ -1,14 +1,15 @@
 import { h, icon } from "./dom";
 import type { IconName } from "./icons";
+import { t, type TKey } from "./i18n";
 
 // Theme choice: "system" (follow OS), "light", "dark". Applied early by /theme.js; this module toggles it.
 export type Theme = "system" | "light" | "dark";
 const KEY = "share.theme";
 const NEXT: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
-const META: Record<Theme, { icon: IconName; label: string }> = {
-  system: { icon: "contrast", label: "Theme: follow system" },
-  light: { icon: "light_mode", label: "Theme: light" },
-  dark: { icon: "dark_mode", label: "Theme: dark" },
+const META: Record<Theme, { icon: IconName; label: TKey }> = {
+  system: { icon: "contrast", label: "theme.system" },
+  light: { icon: "light_mode", label: "theme.light" },
+  dark: { icon: "dark_mode", label: "theme.dark" },
 };
 
 export function currentTheme(): Theme {
@@ -32,9 +33,10 @@ export function themeButton() {
   const btn = h("md-icon-button", { dataset: { testid: "theme-toggle" } });
   const paint = () => {
     const m = META[currentTheme()];
+    const label = t(m.label);
     btn.replaceChildren(icon(m.icon));
-    btn.setAttribute("aria-label", `${m.label}. Activate to change.`);
-    btn.title = m.label;
+    btn.setAttribute("aria-label", t("theme.activate", { label }));
+    btn.title = label;
   };
   btn.addEventListener("click", () => {
     setTheme(NEXT[currentTheme()]);

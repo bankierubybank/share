@@ -1,11 +1,13 @@
-import { api, ApiError, receiptUrl, type Bill, type BillInput, type BillKind, type Category, type Group, type Member, type Split, type SplitMode } from "../api";
+import { api, ApiError, receiptUrl, type Bill, type BillInput, type BillKind, type Category, type Comment, type Group, type Member, type Split, type SplitMode, type Subgroup } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
-import { CATEGORY_META, CATEGORY_ORDER } from "../categories";
+import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
+import { locale, t, tn } from "../i18n";
 import { parseBill, ValidationError } from "../../../src/lib/validate";
 import { downscaleImage } from "../image";
 import { promptPayPayload, renderQr } from "../promptpay";
+import { pickGroupDialog, withMissingMembers } from "./move";
 
 type Field = HTMLElement & { value: string; error: boolean; errorText: string; disabled: boolean; focus(): void; select(): void };
 type Select = HTMLElement & { value: string };
@@ -24,6 +26,12 @@ export interface BillDialogOptions {
   viewAs?: string | null;
   /** Called after a successful delete (the caller offers Undo). */
   onDeleted?: (bill: Bill) => void;
+  /** Saved subgroups for one-tap "split between" picks. */
+  subgroups?: Subgroup[];
+  /** Prefill a NEW bill from an existing one (Duplicate / long-press). */
+  template?: Bill;
+  /** Edit mode: user asked to duplicate this bill (caller opens a new dialog with it as template). */
+  onDuplicate?: (bill: Bill) => void;
 }
 
 const today = () => {
@@ -41,22 +49,21 @@ const store = {
 const toBp = (s: string) => parseMoney(s, "USD");
 const bpToInput = (bp: number) => toInput(bp, "USD").replace(/\.00$/, "");
 
-const MODE_LABEL: Record<SplitMode, string> = {
-  equal: "Equally", exact: "Amounts", shares: "Shares", percent: "Percent", itemized: "Items",
-};
+const MODES: SplitMode[] = ["equal", "exact", "shares", "percent", "itemized"];
 
 /** Opens add/edit dialog. Resolves true when something was saved or deleted. */
 export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> {
   const { group, members, bill } = opts;
+  const src = bill ?? opts.template;
   const gid = group.id;
   const currency = group.currency;
   const memberIds = new Set(members.map((m) => m.id));
-  const kind: BillKind = bill?.kind ?? (opts.payment ? "payment" : "expense");
+  const kind: BillKind = src?.kind ?? (opts.payment ? "payment" : "expense");
   let changed = false;
 
   // ---------- state ----------
-  const s0 = bill?.split;
-  let mode: SplitMode = bill?.splitMode ?? "equal";
+  const s0 = src?.split;
+  let mode: SplitMode = src?.splitMode ?? "equal";
   const equalSel = new Set<string>(s0?.mode === "equal" ? s0.members : members.map((m) => m.id));
   const exact = new Map<string, string>(s0?.mode === "exact" ? s0.shares.map((x) => [x.memberId, toInput(x.amount, currency)]) : []);
   const weights = new Map<string, number>(s0?.mode === "shares" ? s0.weights.map((w) => [w.memberId, w.weight]) : members.map((m) => [m.id, 1]));
@@ -67,43 +74,43 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     : [{ description: "", amount: "", members: new Set(members.map((m) => m.id)) }];
   let serviceStr = s0?.mode === "itemized" && s0.serviceBp ? bpToInput(s0.serviceBp) : "";
   let taxStr = s0?.mode === "itemized" && s0.taxBp ? bpToInput(s0.taxBp) : "";
-  let category: Category = bill?.category ?? "other";
-  let multiPayer = (bill?.payers.length ?? 1) > 1;
-  const payerAmounts = new Map<string, string>(bill && bill.payers.length > 1 ? bill.payers.map((p) => [p.memberId, toInput(p.amount, currency)]) : []);
-  let fxOn = !!bill?.fx;
+  let category: Category = src?.category ?? "other";
+  let multiPayer = (src?.payers.length ?? 1) > 1;
+  const payerAmounts = new Map<string, string>(src && src.payers.length > 1 ? src.payers.map((p) => [p.memberId, toInput(p.amount, currency)]) : []);
+  let fxOn = !!src?.fx;
   let repeat: "none" | "weekly" | "monthly" = "none";
   let pendingReceipt: Blob | null = null;
   let removeReceipt = false;
 
   const defaultPayer =
-    bill?.paidBy ?? opts.payment?.from ?? (opts.viewAs && memberIds.has(opts.viewAs) ? opts.viewAs : null) ??
+    src?.paidBy ?? opts.payment?.from ?? (opts.viewAs && memberIds.has(opts.viewAs) ? opts.viewAs : null) ??
     (() => { const p = store.get(lastPayerKey(gid)); return p && memberIds.has(p) ? p : null; })() ?? members[0]?.id ?? "";
 
   // ---------- fields ----------
   const amount = h("md-outlined-text-field", {
     class: "amount-field",
-    label: "Amount",
+    label: t("bill.amount"),
     inputMode: "decimal",
-    value: bill ? toInput(bill.amount, currency) : opts.payment ? toInput(opts.payment.amount, currency) : "",
+    value: src ? toInput(src.amount, currency) : opts.payment ? toInput(opts.payment.amount, currency) : "",
+    oninput: () => (kind === "payment" ? renderQrBox() : update()),
     suffixText: currency,
     required: true,
     // Quick add: md-dialog focuses [autofocus] on open (script focus alone doesn't stick in Safari).
     autofocus: !bill && !opts.payment,
     dataset: { testid: "bill-amount" },
-    oninput: () => update(),
   }) as Field;
 
-  const fxCurrency = h("md-outlined-select", { quick: true, label: "Paid in", dataset: { testid: "fx-currency" }, onchange: () => { prefillRate(); update(); } },
+  const fxCurrency = h("md-outlined-select", { quick: true, label: t("bill.fxPaidIn"), dataset: { testid: "fx-currency" }, onchange: () => { prefillRate(); update(); } },
     CURRENCIES.filter((c) => c !== currency).map((c) =>
-      h("md-select-option", { value: c, selected: c === (bill?.fx?.currency ?? (currency === "USD" ? "EUR" : "USD")) }, h("div", { slot: "headline" }, c)),
+      h("md-select-option", { value: c, selected: c === (src?.fx?.currency ?? (currency === "USD" ? "EUR" : "USD")) }, h("div", { slot: "headline" }, c)),
     ),
   ) as Select;
   const fxAmount = h("md-outlined-text-field", {
-    label: "Amount paid", inputMode: "decimal", value: bill?.fx ? toInput(bill.fx.amount, bill.fx.currency) : "",
+    label: t("bill.fxAmount"), inputMode: "decimal", value: src?.fx ? toInput(src.fx.amount, src.fx.currency) : "",
     dataset: { testid: "fx-amount" }, oninput: () => update(),
   }) as Field;
   const fxRate = h("md-outlined-text-field", {
-    label: `Rate (1 unit → ${currency})`, inputMode: "decimal", value: bill?.fx?.rate ?? "",
+    label: t("bill.fxRate", { currency }), inputMode: "decimal", value: src?.fx?.rate ?? "",
     dataset: { testid: "fx-rate" }, oninput: () => update(),
   }) as Field;
   const fxResult = h("div", { class: "md-typescale-body-medium muted", dataset: { testid: "fx-result" }, "aria-live": "polite" });
@@ -114,7 +121,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     const last = opts.bills.find((b) => b.fx?.currency === fxCurrency.value);
     if (last?.fx) fxRate.value = last.fx.rate;
   }
-  const fxChip = h("md-filter-chip", { label: "Foreign currency", selected: fxOn, dataset: { testid: "fx-toggle" } }) as Chip;
+  const fxChip = h("md-filter-chip", { label: t("bill.fxToggle"), selected: fxOn, dataset: { testid: "fx-toggle" } }) as Chip;
   fxChip.prepend(icon("currency_exchange", "icon"));
   fxChip.addEventListener("click", (e) => {
     e.preventDefault();
@@ -125,26 +132,26 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   });
 
   const description = h("md-outlined-text-field", {
-    label: "What for?",
-    placeholder: kind === "payment" ? "Payment" : "Dinner, taxi, hotel…",
-    value: bill?.description ?? (kind === "payment" ? "Payment" : ""),
+    label: t("bill.what"),
+    placeholder: kind === "payment" ? t("bill.payment") : t("bill.whatPh"),
+    value: src?.description ?? (kind === "payment" ? t("bill.payment") : ""),
     maxLength: 120,
     required: true,
     dataset: { testid: "bill-description" },
   }) as Field;
 
-  const date = h("md-outlined-text-field", { label: "Date", type: "date", value: bill?.date ?? today(), required: true, dataset: { testid: "bill-date" } }) as Field;
+  const date = h("md-outlined-text-field", { label: t("bill.date"), type: "date", value: bill?.date ?? today(), required: true, dataset: { testid: "bill-date" } }) as Field;
 
   const memberOptions = (sel: string) =>
     members.map((m) => h("md-select-option", { value: m.id, selected: m.id === sel }, h("div", { slot: "headline" }, m.name)));
-  const paidBy = h("md-outlined-select", { quick: true, label: kind === "payment" ? "From" : "Paid by", dataset: { testid: "bill-paid-by" }, onchange: () => update() },
+  const paidBy = h("md-outlined-select", { quick: true, label: kind === "payment" ? t("bill.from") : t("bill.paidBy"), dataset: { testid: "bill-paid-by" }, onchange: () => update() },
     memberOptions(defaultPayer)) as Select;
-  const receiver = h("md-outlined-select", { quick: true, label: "To", dataset: { testid: "bill-receiver" }, onchange: () => update() },
-    memberOptions(bill?.shares[0]?.memberId ?? opts.payment?.to ?? members.find((m) => m.id !== defaultPayer)?.id ?? "")) as Select;
+  const receiver = h("md-outlined-select", { quick: true, label: t("bill.to"), dataset: { testid: "bill-receiver" }, onchange: () => update() },
+    memberOptions(src?.shares[0]?.memberId ?? opts.payment?.to ?? members.find((m) => m.id !== defaultPayer)?.id ?? "")) as Select;
 
   // Category chips (single select)
   const catChips = CATEGORY_ORDER.map((c) => {
-    const chip = h("md-filter-chip", { label: CATEGORY_META[c].label, selected: c === category, dataset: { testid: `cat-${c}` } }) as Chip;
+    const chip = h("md-filter-chip", { label: categoryLabel(c), selected: c === category, dataset: { testid: `cat-${c}` } }) as Chip;
     chip.prepend(icon(CATEGORY_META[c].icon, "icon"));
     chip.addEventListener("click", (e) => {
       e.preventDefault();
@@ -153,21 +160,21 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     });
     return chip;
   });
-  const categorySet = h("md-chip-set", { class: "chip-scroll", "aria-label": "Category" }, catChips);
+  const categorySet = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bill.category") }, catChips);
 
   // Payers
   const payersBox = h("div", { class: "payers", dataset: { testid: "payers-box" } });
   const multiBtn = h("md-text-button", { type: "button", dataset: { testid: "multi-payer-toggle" }, onclick: () => { multiPayer = !multiPayer; renderPayers(); update(); } });
   function renderPayers() {
-    multiBtn.textContent = multiPayer ? "One payer" : "Several people paid";
+    multiBtn.textContent = multiPayer ? t("bill.onePayer") : t("bill.severalPaid");
     if (!multiPayer) return clear(payersBox, paidBy);
     clear(
       payersBox,
-      h("div", { class: "md-typescale-title-small" }, "Who paid how much"),
+      h("div", { class: "md-typescale-title-small" }, t("bill.whoPaidHow")),
       h("div", { class: "split-list" }, members.map((m) =>
         h("div", { class: "split-row" }, h("span", { class: "grow" }, m.name),
           h("md-outlined-text-field", {
-            class: "exact-input", inputMode: "decimal", placeholder: "0", "aria-label": `${m.name} paid`,
+            class: "exact-input", inputMode: "decimal", placeholder: "0", "aria-label": t("bill.paidAria", { name: m.name }),
             value: payerAmounts.get(m.id) ?? "", dataset: { testid: `payer-${m.name}` },
             oninput: (e: Event) => { payerAmounts.set(m.id, (e.target as Field).value); update(); },
           })))),
@@ -175,12 +182,12 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   }
 
   // Split mode chips
-  const modeChips = (Object.keys(MODE_LABEL) as SplitMode[]).map((m) => {
-    const chip = h("md-filter-chip", { label: MODE_LABEL[m], selected: m === mode, dataset: { testid: `mode-${m}` } }) as Chip;
+  const modeChips = MODES.map((m) => {
+    const chip = h("md-filter-chip", { label: t(`mode.${m}`), selected: m === mode, dataset: { testid: `mode-${m}` } }) as Chip;
     chip.addEventListener("click", (e) => {
       e.preventDefault();
       mode = m;
-      modeChips.forEach((c, i) => (c.selected = (Object.keys(MODE_LABEL) as SplitMode[])[i] === m));
+      modeChips.forEach((c, i) => (c.selected = MODES[i] === m));
       if (m === "itemized" && fxOn) { fxOn = false; fxChip.selected = false; }
       renderSplit();
       update();
@@ -189,6 +196,17 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   });
 
   const splitList = h("div", { class: "split-list", dataset: { testid: "split-list" } });
+  const pick = (ids: string[]) => {
+    equalSel.clear();
+    ids.forEach((id) => memberIds.has(id) && equalSel.add(id));
+    renderSplit();
+    update();
+  };
+  const quickPick = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bill.quickSelect"), dataset: { testid: "quick-pick" } },
+    h("md-assist-chip", { label: t("common.everyone"), dataset: { testid: "pick-everyone" }, onclick: () => pick(members.map((m) => m.id)) }),
+    h("md-assist-chip", { label: t("common.noOne"), dataset: { testid: "pick-none" }, onclick: () => pick([]) }),
+    (opts.subgroups ?? []).map((sg) =>
+      h("md-assist-chip", { label: sg.name, dataset: { testid: `pick-sub-${sg.name}` }, onclick: () => pick(sg.memberIds) })));
   const itemsBox = h("div", { class: "stack-sm", dataset: { testid: "items-box" } });
   const splitStatus = h("div", { class: "split-status md-typescale-body-medium", dataset: { testid: "split-status" }, role: "status", "aria-live": "polite" });
   const formError = h("div", { class: "form-error md-typescale-body-medium", role: "alert" });
@@ -202,6 +220,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   function renderSplit() {
     shareCells.clear();
     itemsBox.hidden = mode !== "itemized";
+    quickPick.hidden = mode !== "equal";
     amount.disabled = mode === "itemized";
     if (mode === "itemized") renderItems();
     const row = (m: Member, control: Node | null) => h("div", { class: "split-row" }, control, h("span", { class: "grow" }, m.name), shareCell(m.id));
@@ -217,13 +236,13 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
           case "equal":
             return h("label", { class: "split-row" },
               h("md-checkbox", {
-                checked: equalSel.has(m.id), "aria-label": `Include ${m.name}`, dataset: { testid: `split-check-${m.name}` },
+                checked: equalSel.has(m.id), "aria-label": t("bill.include", { name: m.name }), dataset: { testid: `split-check-${m.name}` },
                 onchange: (e: Event) => { (e.target as Checkbox).checked ? equalSel.add(m.id) : equalSel.delete(m.id); update(); },
               }),
               h("span", { class: "grow" }, m.name), shareCell(m.id));
           case "exact":
             return h("div", { class: "split-row" }, h("span", { class: "grow" }, m.name),
-              numField(`${m.name} owes`, exact.get(m.id) ?? "", `split-exact-${m.name}`, (v) => exact.set(m.id, v)));
+              numField(t("bill.owesAria", { name: m.name }), exact.get(m.id) ?? "", `split-exact-${m.name}`, (v) => exact.set(m.id, v)));
           case "shares": {
             const val = h("span", { class: "weight tabular", dataset: { testid: `weight-${m.name}` }, "aria-live": "polite" }, String(weights.get(m.id) ?? 0));
             const step = (d: number) => {
@@ -231,13 +250,13 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
               val.textContent = String(weights.get(m.id));
               update();
             };
-            return row(m, h("div", { class: "stepper", role: "group", "aria-label": `${m.name} shares` },
-              h("md-icon-button", { type: "button", "aria-label": `Fewer shares for ${m.name}`, onclick: () => step(-1), dataset: { testid: `weight-dec-${m.name}` } }, icon("remove")),
+            return row(m, h("div", { class: "stepper", role: "group", "aria-label": t("bill.sharesAria", { name: m.name }) },
+              h("md-icon-button", { type: "button", "aria-label": t("bill.fewerShares", { name: m.name }), onclick: () => step(-1), dataset: { testid: `weight-dec-${m.name}` } }, icon("remove")),
               val,
-              h("md-icon-button", { type: "button", "aria-label": `More shares for ${m.name}`, onclick: () => step(1), dataset: { testid: `weight-inc-${m.name}` } }, icon("add"))));
+              h("md-icon-button", { type: "button", "aria-label": t("bill.moreShares", { name: m.name }), onclick: () => step(1), dataset: { testid: `weight-inc-${m.name}` } }, icon("add"))));
           }
           case "percent":
-            return row(m, numField(`${m.name} percent`, percents.get(m.id) ?? "", `split-pct-${m.name}`, (v) => percents.set(m.id, v), "pct-input"));
+            return row(m, numField(t("bill.percentAria", { name: m.name }), percents.get(m.id) ?? "", `split-pct-${m.name}`, (v) => percents.set(m.id, v), "pct-input"));
           case "itemized":
             return row(m, null);
         }
@@ -252,16 +271,16 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
         h("div", { class: "item-card", dataset: { testid: "item" } },
           h("div", { class: "row" },
             h("md-outlined-text-field", {
-              class: "grow", label: `Item ${i + 1}`, value: it.description, dataset: { testid: `item-desc-${i}` },
+              class: "grow", label: t("bill.item", { n: i + 1 }), value: it.description, dataset: { testid: `item-desc-${i}` },
               oninput: (e: Event) => { it.description = (e.target as Field).value; update(); },
             }),
             h("md-outlined-text-field", {
-              class: "exact-input", label: "Price", inputMode: "decimal", value: it.amount, dataset: { testid: `item-amount-${i}` },
+              class: "exact-input", label: t("bill.price"), inputMode: "decimal", value: it.amount, dataset: { testid: `item-amount-${i}` },
               oninput: (e: Event) => { it.amount = (e.target as Field).value; update(); },
             }),
-            items.length > 1 && h("md-icon-button", { type: "button", "aria-label": `Remove item ${i + 1}`, onclick: () => { items.splice(i, 1); renderItems(); update(); } }, icon("close")),
+            items.length > 1 && h("md-icon-button", { type: "button", "aria-label": t("bill.removeItem", { n: i + 1 }), onclick: () => { items.splice(i, 1); renderItems(); update(); } }, icon("close")),
           ),
-          h("md-chip-set", { "aria-label": `Who had item ${i + 1}` }, members.map((m) => {
+          h("md-chip-set", { "aria-label": t("bill.whoHadItem", { n: i + 1 }) }, members.map((m) => {
             const c = h("md-filter-chip", { label: m.name, selected: it.members.has(m.id), dataset: { testid: `item-${i}-${m.name}` } }) as Chip;
             c.addEventListener("click", (e) => {
               e.preventDefault();
@@ -274,11 +293,11 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
         ),
       ),
       h("md-text-button", { type: "button", dataset: { testid: "item-add" }, onclick: () => { items.push({ description: "", amount: "", members: new Set(members.map((m) => m.id)) }); renderItems(); update(); } },
-        icon("add", "icon"), "Add item"),
+        icon("add", "icon"), t("bill.addItem")),
       h("div", { class: "row wrap" },
-        h("md-outlined-text-field", { class: "grow", label: "Service charge", suffixText: "%", inputMode: "decimal", value: serviceStr, dataset: { testid: "item-service" },
+        h("md-outlined-text-field", { class: "grow", label: t("bill.service"), suffixText: "%", inputMode: "decimal", value: serviceStr, dataset: { testid: "item-service" },
           oninput: (e: Event) => { serviceStr = (e.target as Field).value; update(); } }),
-        h("md-outlined-text-field", { class: "grow", label: "Tax / VAT", suffixText: "%", inputMode: "decimal", value: taxStr, dataset: { testid: "item-tax" },
+        h("md-outlined-text-field", { class: "grow", label: t("bill.tax"), suffixText: "%", inputMode: "decimal", value: taxStr, dataset: { testid: "item-tax" },
           oninput: (e: Event) => { taxStr = (e.target as Field).value; update(); } }),
       ),
     );
@@ -299,7 +318,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       case "itemized":
         return {
           mode,
-          items: items.map((it) => ({ description: it.description.trim() || "Item", amount: parseMoney(it.amount, currency) ?? -1, members: members.filter((m) => it.members.has(m.id)).map((m) => m.id) })),
+          items: items.map((it) => ({ description: it.description.trim() || t("bill.itemDefault"), amount: parseMoney(it.amount, currency) ?? -1, members: members.filter((m) => it.members.has(m.id)).map((m) => m.id) })),
           serviceBp: serviceStr.trim() ? toBp(serviceStr) ?? -1 : 0,
           taxBp: taxStr.trim() ? toBp(taxStr) ?? -1 : 0,
         };
@@ -308,7 +327,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
 
   function buildBody(): BillInput {
     if (kind === "payment")
-      return { kind, description: description.value.trim() || "Payment", amount: parseMoney(amount.value, currency) ?? -1, paidBy: paidBy.value, date: date.value, category: "other", split: { mode: "equal", members: [receiver.value] } };
+      return { kind, description: description.value.trim() || t("bill.payment"), amount: parseMoney(amount.value, currency) ?? -1, paidBy: paidBy.value, date: date.value, category: "other", split: { mode: "equal", members: [receiver.value] } };
     const body: BillInput = { kind, description: description.value.trim() || "x", date: date.value, category, split: buildSplit() };
     if (mode !== "itemized") {
       if (fxOn) {
@@ -330,19 +349,19 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       if (payers) parseBill({ ...body, amount: r.amount, fx: body.fx }, memberIds, currency);
       return { ok: true, amount: r.amount, shares: new Map(r.shares.map((x) => [x.memberId, x.amount])) };
     } catch (e) {
-      return { ok: false, error: e instanceof ValidationError ? humanize(e.message) : "Check the amounts" };
+      return { ok: false, error: e instanceof ValidationError ? humanize(e.message) : t("bill.err.check") };
     }
   }
 
   function humanize(msg: string): string {
     const sums = msg.match(/^(payers|shares) sum \((\d+)\) must equal amount \((\d+)\)/);
     if (sums)
-      return `${sums[1] === "payers" ? "Payers" : "Amounts"} add up to ${formatMoney(+sums[2], currency)}, the bill is ${formatMoney(+sums[3], currency)}`;
-    if (/computed amount|amount must be an integer|amount out of range|fx\.amount/.test(msg)) return "Enter an amount";
-    if (/share amount|percent \(bp\)|item \d+ amount|payer amount|weight/.test(msg)) return "Check the numbers — only positive amounts with up to 2 decimals";
-    if (/fx\.rate/.test(msg)) return "Enter an exchange rate, e.g. 36.25";
-    if (/split\.members must be a non-empty/.test(msg)) return "Select at least one person";
-    if (/members must be a non-empty/.test(msg)) return "Each item needs at least one person";
+      return t(sums[1] === "payers" ? "bill.err.sumPayers" : "bill.err.sumAmounts", { sum: formatMoney(+sums[2], currency), total: formatMoney(+sums[3], currency) });
+    if (/computed amount|amount must be an integer|amount out of range|fx\.amount/.test(msg)) return t("bill.err.amount");
+    if (/share amount|percent \(bp\)|item \d+ amount|payer amount|weight/.test(msg)) return t("bill.err.numbers");
+    if (/fx\.rate/.test(msg)) return t("bill.err.rate");
+    if (/split\.members must be a non-empty/.test(msg)) return t("bill.err.noPerson");
+    if (/members must be a non-empty/.test(msg)) return t("bill.err.itemPerson");
     return msg.charAt(0).toUpperCase() + msg.slice(1);
   }
 
@@ -360,7 +379,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     } else if (fxOn) fxResult.textContent = "";
     if (p.ok) {
       const n = p.shares.size;
-      splitStatus.textContent = `${formatMoney(p.amount, currency)} · ${n} ${n === 1 ? "person" : "people"}`;
+      splitStatus.textContent = `${formatMoney(p.amount, currency)} · ${tn("people", n)}`;
       splitStatus.classList.remove("error");
     } else {
       splitStatus.textContent = p.error;
@@ -380,33 +399,33 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     const key = `${to!.promptpay}|${amt}`;
     if (key === qrKey) return;
     qrKey = key;
-    const canvas = h("canvas", { width: 240, height: 240, role: "img", "aria-label": `PromptPay QR code to pay ${to!.name} ${formatMoney(amt!, currency)}`, dataset: { testid: "qr-canvas" } });
+    const canvas = h("canvas", { width: 240, height: 240, role: "img", "aria-label": t("bill.qrAria", { name: to!.name, amount: formatMoney(amt!, currency) }), dataset: { testid: "qr-canvas" } });
     clear(qrBox,
-      h("div", { class: "md-typescale-title-small" }, icon("qr_code_2"), ` Pay ${to!.name} with PromptPay`),
+      h("div", { class: "md-typescale-title-small" }, icon("qr_code_2"), " ", t("bill.qrTitle", { name: to!.name })),
       canvas,
-      h("div", { class: "md-typescale-body-small muted" }, "Scan with any Thai banking app, then tap Save to record the payment."));
+      h("div", { class: "md-typescale-body-small muted" }, t("bill.qrHelp")));
     const payload = promptPayPayload(to!.promptpay!, amt!);
     qrBox.dataset.payload = payload;
     void renderQr(canvas, payload).catch(() => { qrBox.hidden = true; });
   }
 
   // ---------- more: repeat + receipt ----------
-  const repeatSel = h("md-outlined-select", { quick: true, label: "Repeat", dataset: { testid: "bill-repeat" }, onchange: () => { repeat = repeatSel.value as typeof repeat; receiptBox.hidden = repeat !== "none"; } },
-    h("md-select-option", { value: "none", selected: true }, h("div", { slot: "headline" }, "Doesn't repeat")),
-    h("md-select-option", { value: "weekly" }, h("div", { slot: "headline" }, "Every week")),
-    h("md-select-option", { value: "monthly" }, h("div", { slot: "headline" }, "Every month"))) as Select;
+  const repeatSel = h("md-outlined-select", { quick: true, label: t("bill.repeat"), dataset: { testid: "bill-repeat" }, onchange: () => { repeat = repeatSel.value as typeof repeat; receiptBox.hidden = repeat !== "none"; } },
+    h("md-select-option", { value: "none", selected: true }, h("div", { slot: "headline" }, t("bill.repeatNone"))),
+    h("md-select-option", { value: "weekly" }, h("div", { slot: "headline" }, t("bill.repeatWeek"))),
+    h("md-select-option", { value: "monthly" }, h("div", { slot: "headline" }, t("bill.repeatMonth")))) as Select;
 
-  const fileInput = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "visually-hidden", "aria-label": "Choose receipt photo", dataset: { testid: "receipt-input" } }) as HTMLInputElement;
+  const fileInput = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "visually-hidden", "aria-label": t("bill.receiptChoose"), dataset: { testid: "receipt-input" } }) as HTMLInputElement;
   const receiptPreview = h("div", { class: "receipt-preview", dataset: { testid: "receipt-preview" } });
   const receiptBox = h("div", { class: "stack-sm" }, fileInput, receiptPreview);
   function renderReceipt() {
     const existing = bill?.hasReceipt && !removeReceipt;
     const src = pendingReceipt ? URL.createObjectURL(pendingReceipt) : existing ? receiptUrl(gid, bill!.id, bill!.updatedAt) : null;
     clear(receiptPreview,
-      src && h("a", { href: src, target: "_blank", rel: "noopener", class: "receipt-thumb", "aria-label": "Open receipt photo" }, h("img", { src, alt: "Receipt photo", dataset: { testid: "receipt-img" } })),
+      src && h("a", { href: src, target: "_blank", rel: "noopener", class: "receipt-thumb", "aria-label": t("bill.receiptOpen") }, h("img", { src, alt: t("bill.receiptAlt"), dataset: { testid: "receipt-img" } })),
       h("div", { class: "row" },
-        h("md-outlined-button", { type: "button", onclick: () => fileInput.click(), dataset: { testid: "receipt-add" } }, icon("photo_camera", "icon"), src ? "Replace photo" : "Add receipt photo"),
-        src && h("md-text-button", { type: "button", class: "danger", dataset: { testid: "receipt-remove" }, onclick: () => { pendingReceipt = null; removeReceipt = !!bill?.hasReceipt; renderReceipt(); } }, "Remove")));
+        h("md-outlined-button", { type: "button", onclick: () => fileInput.click(), dataset: { testid: "receipt-add" } }, icon("photo_camera", "icon"), src ? t("bill.receiptReplace") : t("bill.receiptAdd")),
+        src && h("md-text-button", { type: "button", class: "danger", dataset: { testid: "receipt-remove" }, onclick: () => { pendingReceipt = null; removeReceipt = !!bill?.hasReceipt; renderReceipt(); } }, t("common.remove"))));
   }
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files?.[0];
@@ -419,41 +438,41 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       renderReceipt();
     } catch {
       pendingReceipt = null;
-      snackbar("Couldn't use that image — try a JPEG or PNG photo");
+      snackbar(t("bill.imageFailed"));
     }
   });
 
   // ---------- save / delete ----------
-  const saveBtn = h("md-filled-button", { onclick: () => save(), dataset: { testid: "bill-save" } }, "Save") as HTMLElement & { disabled: boolean };
+  const saveBtn = h("md-filled-button", { onclick: () => save(), dataset: { testid: "bill-save" } }, t("common.save")) as HTMLElement & { disabled: boolean };
 
   async function save() {
     formError.textContent = "";
     description.error = amount.error = false;
     if (kind === "expense" && !description.value.trim()) {
       description.error = true;
-      description.errorText = "What was it for?";
+      description.errorText = t("bill.whatRequired");
       return description.focus();
     }
     if (kind === "payment" && paidBy.value === receiver.value) {
-      formError.textContent = "From and To must be different people";
+      formError.textContent = t("bill.sameFromTo");
       return;
     }
     const p = kind === "payment" ? null : preview();
     if (p && !p.ok) {
       formError.textContent = p.error;
-      if (p.error === "Enter an amount" && !amount.disabled) { amount.error = true; amount.errorText = p.error; amount.focus(); }
+      if (p.error === t("bill.err.amount") && !amount.disabled) { amount.error = true; amount.errorText = p.error; amount.focus(); }
       return;
     }
     const body = buildBody();
     if (kind === "payment" && !(body.amount! > 0)) {
       amount.error = true;
-      amount.errorText = "Enter an amount";
+      amount.errorText = t("bill.err.amount");
       return amount.focus();
     }
     if (p?.ok && body.payers) {
       const sum = body.payers.reduce((a, x) => a + x.amount, 0);
       if (sum !== p.amount) {
-        formError.textContent = `Payers add up to ${formatMoney(sum, currency)}, the bill is ${formatMoney(p.amount, currency)}`;
+        formError.textContent = t("bill.err.sumPayers", { sum: formatMoney(sum, currency), total: formatMoney(p.amount, currency) });
         return;
       }
     }
@@ -463,18 +482,18 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       if (!bill && repeat !== "none") {
         const { date: start, ...template } = body;
         const r = await api.createRecurring(gid, repeat, start, template);
-        snackbar(r.created ? `Repeating bill added (${r.created} so far)` : "Repeating bill scheduled");
+        snackbar(r.created ? t("bill.repeatAdded", { n: r.created }) : t("bill.repeatScheduled"));
       } else {
         saved = bill ? (await api.updateBill(gid, bill.id, body)).bill : (await api.createBill(gid, body)).bill;
         if (pendingReceipt) await api.uploadReceipt(gid, saved.id, pendingReceipt);
         else if (removeReceipt && bill?.hasReceipt) await api.deleteReceipt(gid, bill.id);
-        snackbar(bill ? "Bill updated" : kind === "payment" ? "Payment recorded" : "Bill added");
+        snackbar(bill ? t("bill.updated") : kind === "payment" ? t("bill.paymentRecorded") : t("bill.added"));
       }
       if (kind === "expense" && !multiPayer) store.set(lastPayerKey(gid), paidBy.value);
       changed = true;
       dialog.close("saved");
     } catch (err) {
-      formError.textContent = err instanceof ApiError ? err.message : "Could not save";
+      formError.textContent = err instanceof ApiError ? err.message : t("common.saveFailed");
     } finally {
       saveBtn.disabled = false;
     }
@@ -482,25 +501,90 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
 
   async function remove() {
     if (!bill) return;
-    if (!(await confirmDialog("Delete bill?", `“${bill.description}” will be removed. You can undo right after.`))) return;
+    if (!(await confirmDialog(t("bill.deleteTitle"), t("bill.deleteText", { desc: bill.description })))) return;
     try {
       await api.deleteBill(gid, bill.id);
       changed = true;
       opts.onDeleted?.(bill);
       dialog.close("deleted");
     } catch (err) {
-      formError.textContent = err instanceof ApiError ? err.message : "Could not delete";
+      formError.textContent = err instanceof ApiError ? err.message : t("common.deleteFailed");
+    }
+  }
+
+  // ---------- comments (edit mode) ----------
+  const commentsBox = h("section", { class: "comments stack-sm", "aria-label": t("bill.comments"), dataset: { testid: "comments" } });
+  const nameOf = (id: string | null) => members.find((m) => m.id === id)?.name ?? null;
+  async function loadComments() {
+    if (!bill) return;
+    let list: Comment[] = [];
+    try {
+      list = (await api.comments(gid, bill.id)).comments;
+    } catch {
+      /* offline: show the box without history */
+    }
+    const input = h("md-outlined-text-field", {
+      type: "textarea", rows: 2, label: opts.viewAs ? t("bill.commentAs", { name: nameOf(opts.viewAs) ?? "" }) : t("bill.commentAdd"), maxLength: 500,
+      dataset: { testid: "comment-input" },
+    }) as Field;
+    const post = h("md-filled-tonal-button", { type: "button", dataset: { testid: "comment-post" }, onclick: async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      try {
+        await api.addComment(gid, bill.id, text, opts.viewAs ?? null);
+        changed = true;
+        loadComments();
+      } catch (e) {
+        input.error = true;
+        input.errorText = e instanceof Error ? e.message : t("bill.postFailed");
+      }
+    } }, t("bill.post"));
+    clear(commentsBox,
+      h("h3", { class: "md-typescale-title-small" }, `${t("bill.comments")}${list.length ? ` (${list.length})` : ""}`),
+      h("ol", { class: "comment-list" }, list.map((c) =>
+        h("li", { class: "comment", dataset: { testid: "comment" } },
+          h("div", { class: "md-typescale-label-medium" }, nameOf(c.authorMemberId) ?? c.actor ?? t("bill.someone"),
+            h("span", { class: "muted" }, ` · ${new Date(c.createdAt).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "short" })}`)),
+          h("div", { class: "comment-body md-typescale-body-medium" }, c.body),
+          h("md-icon-button", { type: "button", class: "comment-del", "aria-label": t("bill.commentDelete"), dataset: { testid: "comment-delete" }, onclick: async () => {
+            await api.deleteComment(gid, bill.id, c.id);
+            changed = true;
+            loadComments();
+          } }, icon("delete"))))),
+      group.archived ? null : h("div", { class: "row comment-compose" }, h("div", { class: "grow" }, input), post));
+  }
+
+  async function moveBill() {
+    if (!bill) return;
+    const target = await pickGroupDialog(t("bill.moveTitle"), t("bill.moveHelp"), gid, currency);
+    if (!target) return;
+    try {
+      const r = await withMissingMembers((add) => api.moveBill(gid, bill.id, target, add));
+      if (!r) return;
+      changed = true;
+      snackbar(r.addedMembers.length ? t("bill.movedAdded", { names: r.addedMembers.join(", ") }) : t("bill.moved"));
+      dialog.close("moved");
+    } catch (e) {
+      formError.textContent = e instanceof ApiError ? e.message : t("bill.moveFailed");
     }
   }
 
   // ---------- layout ----------
-  const title = bill ? (kind === "payment" ? "Edit payment" : "Edit bill") : kind === "payment" ? "Record payment" : "Add bill";
+  const title = bill ? (kind === "payment" ? t("bill.editPayment") : t("bill.edit")) : kind === "payment" ? t("bill.recordPayment") : t("bill.add");
   const meta = bill?.createdBy ? h("div", { class: "md-typescale-body-small muted", dataset: { testid: "bill-created-by" } },
-    bill.createdBy === "recurring" ? "Added automatically (repeating bill)" : `Added by ${bill.createdBy}`) : null;
+    bill.createdBy === "recurring" ? t("bill.addedAuto") : t("bill.addedBy", { name: bill.createdBy })) : null;
 
   const content =
     kind === "payment"
-      ? h("div", { class: "stack" }, h("div", { class: "row wrap" }, paidBy, icon("arrow_forward"), receiver), amount, qrBox, date, description, formError)
+      ? h("div", { class: "stack" }, h("div", { class: "row wrap" }, paidBy, icon("arrow_forward"), receiver), amount,
+          opts.payment && h("div", { class: "stack-sm" },
+            h("md-chip-set", { "aria-label": t("bill.amount") },
+              h("md-assist-chip", { label: t("bill.payFull", { amount: formatMoney(opts.payment.amount, currency) }), dataset: { testid: "pay-full" },
+                onclick: () => { amount.value = toInput(opts.payment!.amount, currency); renderQrBox(); } }),
+              h("md-assist-chip", { label: t("bill.payHalf"), dataset: { testid: "pay-half" },
+                onclick: () => { amount.value = toInput(Math.round(opts.payment!.amount / 2), currency); renderQrBox(); } })),
+            h("p", { class: "md-typescale-body-small muted" }, t("bill.payPartial"))),
+          qrBox, date, description, bill && commentsBox, formError)
       : h("div", { class: "stack" },
           amount,
           h("div", { class: "row wrap tight-gap" }, fxChip),
@@ -509,13 +593,19 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
           categorySet,
           h("div", { class: "row wrap" }, h("div", { class: "grow" }, date), h("div", { class: "grow" }, payersBox)),
           h("div", { class: "row end" }, multiBtn),
-          h("div", { class: "split-head" }, h("span", { class: "md-typescale-title-small", id: "split-label" }, "Split"),
+          h("div", { class: "split-head" }, h("span", { class: "md-typescale-title-small", id: "split-label" }, t("bill.split")),
             h("md-chip-set", { class: "chip-scroll", "aria-labelledby": "split-label" }, modeChips)),
           itemsBox,
+          quickPick,
           splitList,
           splitStatus,
-          h("details", { class: "more" }, h("summary", { class: "md-typescale-title-small" }, "More options"),
-            h("div", { class: "stack" }, !bill && repeatSel, receiptBox)),
+          h("details", { class: "more" }, h("summary", { class: "md-typescale-title-small" }, t("bill.more")),
+            h("div", { class: "stack" }, !bill && repeatSel, receiptBox,
+              bill && !group.archived && h("div", { class: "row wrap" },
+                h("md-outlined-button", { type: "button", dataset: { testid: "bill-duplicate" },
+                  onclick: () => dialog.close("duplicate") }, icon("content_copy", "icon"), t("bill.duplicate")),
+                h("md-outlined-button", { type: "button", dataset: { testid: "bill-move" }, onclick: moveBill }, icon("arrow_forward", "icon"), t("bill.moveBtn"))))),
+          bill && commentsBox,
           meta,
           formError,
         );
@@ -526,8 +616,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     h("div", { slot: "headline" }, title),
     h("form", { slot: "content", id: "bill-form", novalidate: true, onsubmit: (e: Event) => { e.preventDefault(); save(); } }, content),
     h("div", { slot: "actions" },
-      bill && h("md-text-button", { class: "danger push-left", onclick: remove, dataset: { testid: "bill-delete" } }, "Delete"),
-      h("md-text-button", { onclick: () => dialog.close("cancel"), dataset: { testid: "bill-cancel" } }, "Cancel"),
+      bill && h("md-text-button", { class: "danger push-left", onclick: remove, dataset: { testid: "bill-delete" } }, t("common.delete")),
+      h("md-text-button", { onclick: () => dialog.close("cancel"), dataset: { testid: "bill-cancel" } }, t("common.cancel")),
       saveBtn),
   ) as MdDialog;
 
@@ -535,6 +625,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   if (kind === "expense") renderPayers();
   renderSplit();
   renderReceipt();
+  void loadComments();
   if (fxOn) prefillRate();
   update();
   // Quick add: amount first.
@@ -542,6 +633,6 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     update(); // md-select values exist only after first render (QR + previews need them)
     if (!bill && kind === "expense") amount.focus();
   }, { once: true });
-  await openDialog(dialog);
+  if ((await openDialog(dialog)) === "duplicate" && bill) opts.onDuplicate?.(bill);
   return changed;
 }

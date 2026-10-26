@@ -26,6 +26,7 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 | `src/lib/split.ts` | Largest-remainder allocation (shares/percent), itemized + service/VAT, fx conversion (BigInt) |
 | `src/lib/actor.ts` | "Who did it" from Access headers (display only, sanitized) |
 | `src/lib/promptpay-id.ts` | PromptPay id normalization (shared with web) |
+| `src/routes-social.ts`, `src/db-social.ts`, `src/lib/social.ts` | Comments, subgroups, read-only view links, move/merge |
 | `src/backup.ts` | Nightly D1 → R2 gzip JSON backup + 30-day retention |
 | `src/lib/validate.ts` | Input validation (pure) |
 | `src/lib/access.ts` | Cloudflare Access JWT verification (jose, JWKS) |
@@ -51,6 +52,9 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 - `bill_payers(bill_id FK, member_id FK, amount)` PK `(bill_id, member_id)` — who paid what
 - `activity(id, group_id FK, at, actor, action, entity_id, detail JSON)`
 - `recurrences(id, group_id FK, frequency, anchor_day, next_date, template JSON, active, last_error, created_by)`
+- `bill_comments(id, bill_id FK cascade, group_id FK, author_member_id FK set null, actor, body, created_at)`
+- `subgroups(id, group_id FK, name, member_ids JSON)`
+- `groups.view_id` (unique, nullable): read-only link id, separate from the edit id
 
 Shares and payers are stored resolved (cents per member), so the summary is a simple aggregation; `split_json`
 keeps the user's input (weights / percents / items) for editing. Writes of a bill + its children + activity
@@ -73,7 +77,10 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 - Writes require `Content-Type: application/json` (blocks simple-form CSRF), 32 KiB body cap — even bodyless
   POSTs (restore) send `{}`. Receipt upload is the one exception: `image/jpeg|png|webp`, ≤ 2 MiB, magic-byte
   sniffed, served back with its own `Content-Security-Policy: default-src 'none'; sandbox` (not overwritten).
-- Archived groups are read-only server-side (409 `archived`).
+- Archived groups are read-only server-side (409 `archived`) — except revoking a read-only link.
+- Read-only links: `GET /api/view/:viewId` is the only route keyed by the view id; it returns a trimmed snapshot
+  without the group id (the edit secret), PromptPay ids, receipts, activity or actors. Rotating issues a new id.
+- Never log another group's id anywhere readable (activity of the target after a merge logs only the name).
 - Activity `actor` comes from Access headers, validated as an email shape; it is display data, not auth.
 - Frontend renders user text via `textContent` / Lit-free DOM building — no `innerHTML` with data.
 
@@ -83,6 +90,9 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 - **Material Web (`@material/web`)** = Google's official M3 web components; bundled with Vite.
   Icons: `@material-symbols/svg-400` per-icon SVGs (tree-shaken, ~0.5 KB each) instead of the 3+ MB icon font.
   Font: `@fontsource/roboto` (latin 400/500/700, ~66 KB), Thai falls back to system fonts.
+- **Lazy chunks**: `main.ts` routes import `views/group` on demand; group view lazy-imports the bill dialog,
+  stats, export, move. Group-only Material components are imported by `views/group.ts`, not `main.ts`.
+- **i18n**: `web/src/i18n.ts` (`t()`, en + th dictionaries, th typed against en keys); Intl uses `locale()`.
 - **Shared validation**: the bill dialog imports `src/lib/validate.ts` so its live preview equals the server result.
 - `md-menu` uses `quick` (no animation): its close animation hung (scale(Infinity)) and the menu couldn't reopen.
 - **Integer minor units** everywhere; formatting via `Intl.NumberFormat` per group currency.

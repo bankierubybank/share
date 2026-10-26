@@ -2,6 +2,7 @@
 import { CATEGORY_META } from "./categories";
 import type { Bill, Group, Member, Summary } from "./api";
 import { toInput } from "./money";
+import { en } from "./i18n";
 
 // Category may be an unknown string in old/foreign data: fall back to the raw value.
 type ExportBill = Omit<Bill, "category"> & { category?: string };
@@ -40,7 +41,7 @@ export function billsToCsv(input: { group: Group; members: Member[]; bills: Bill
       row([
         b.date,
         b.kind === "payment" ? "Payment" : "Expense",
-        text(b.kind === "payment" ? "" : (CATEGORY_META as Record<string, { label: string }>)[b.category ?? ""]?.label ?? b.category ?? ""),
+        text(b.kind === "payment" ? "" : (() => { const k = (CATEGORY_META as Record<string, { key: keyof typeof en }>)[b.category ?? ""]?.key; return k ? en[k] : b.category ?? ""; })()),
         text(b.description),
         money(b.amount),
         cur,

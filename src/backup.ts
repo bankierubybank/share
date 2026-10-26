@@ -3,7 +3,7 @@
 // Restore: scripts/restore-backup.mjs → SQL file → `wrangler d1 execute --file`.
 
 /** FK order: parents first, so a restore can insert in this order. */
-export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences"] as const;
+export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups"] as const;
 const PAGE = 1000;
 export const BACKUP_RETENTION_DAYS = 30;
 

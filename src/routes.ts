@@ -8,12 +8,14 @@ import {
 } from "./lib/validate";
 import { actorOf } from "./lib/actor";
 import { runBackup } from "./backup";
+import { registerSocial } from "./routes-social";
+import { stripMemberFromSubgroups } from "./db-social";
 
 export type AppEnv = { Bindings: Env };
 type GroupEnv = AppEnv & { Variables: { group: db.Group } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -89,7 +91,9 @@ g.use("*", async (c, next) => {
   if (!group) return apiError(c, 404, "not_found", "group not found");
   const m = c.req.method;
   const isRoot = /\/groups\/[^/]+\/?$/.test(c.req.path);
-  if (group.archived && m !== "GET" && m !== "HEAD" && !(isRoot && (m === "PATCH" || m === "DELETE")))
+  // Revoking a read-only link must always be possible, even while archived.
+  const isRevoke = m === "DELETE" && /\/view-link\/?$/.test(c.req.path);
+  if (group.archived && m !== "GET" && m !== "HEAD" && !isRevoke && !(isRoot && (m === "PATCH" || m === "DELETE")))
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
   c.set("group", group);
   await next();
@@ -156,6 +160,7 @@ g.delete("/members/:mid", async (c) => {
     return apiError(c, 409, "conflict", "member is used by bills or recurring bills; change those first");
   const r = await db.deleteMember(c.env.DB, gid, mid, actor(c));
   if (!r.ok) return apiError(c, 404, "not_found", "member not found");
+  await stripMemberFromSubgroups(c.env.DB, gid, mid);
   if (r.receiptKeys.length) await c.env.RECEIPTS.delete(r.receiptKeys);
   return c.body(null, 204);
 });
@@ -248,16 +253,20 @@ g.delete("/bills/:bid/receipt", async (c) => {
 
 // ---------- summary / activity ----------
 
-g.get("/summary", async (c) => {
-  const gid = gidOf(c);
-  if (!c.get("group").archived) await materializeDue(c.env, gid);
-  const [members, bills] = await Promise.all([db.listMembers(c.env.DB, gid), db.listBills(c.env.DB, gid)]);
+export function summaryOf(members: db.Member[], bills: db.Bill[]) {
   const balances = computeBalances(members.map((m) => m.id), bills);
   const expenses = bills.filter((b) => b.kind === "expense");
   const byCategory: Record<string, number> = {};
   for (const b of expenses) byCategory[b.category] = (byCategory[b.category] ?? 0) + b.amount;
   const total = expenses.reduce((a, b) => a + b.amount, 0);
-  return c.json({ balances, settlements: computeSettlements(balances), total, byCategory });
+  return { balances, settlements: computeSettlements(balances), total, byCategory };
+}
+
+g.get("/summary", async (c) => {
+  const gid = gidOf(c);
+  if (!c.get("group").archived) await materializeDue(c.env, gid);
+  const [members, bills] = await Promise.all([db.listMembers(c.env.DB, gid), db.listBills(c.env.DB, gid)]);
+  return c.json(summaryOf(members, bills));
 });
 
 g.get("/activity", async (c) => {
@@ -290,5 +299,7 @@ g.delete("/recurring/:rid", async (c) => {
     return apiError(c, 404, "not_found", "no active recurring bill with that id");
   return c.body(null, 204);
 });
+
+registerSocial(api, g, { apiError, readJson, summaryOf });
 
 api.route("/groups/:gid", g);

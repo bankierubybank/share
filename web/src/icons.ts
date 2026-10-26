@@ -53,6 +53,7 @@ import i_settings from "@material-symbols/svg-400/outlined/settings.svg?raw";
 import i_share from "@material-symbols/svg-400/outlined/share.svg?raw";
 import i_shopping_bag from "@material-symbols/svg-400/outlined/shopping_bag.svg?raw";
 import i_shopping_cart from "@material-symbols/svg-400/outlined/shopping_cart.svg?raw";
+import i_translate from "@material-symbols/svg-400/outlined/translate.svg?raw";
 import i_table_view from "@material-symbols/svg-400/outlined/table_view.svg?raw";
 import i_unarchive from "@material-symbols/svg-400/outlined/unarchive.svg?raw";
 import i_undo from "@material-symbols/svg-400/outlined/undo.svg?raw";
@@ -111,6 +112,7 @@ export const ICONS = {
   shopping_bag: i_shopping_bag,
   shopping_cart: i_shopping_cart,
   table_view: i_table_view,
+  translate: i_translate,
   unarchive: i_unarchive,
   undo: i_undo,
 } as const;

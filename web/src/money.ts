@@ -1,4 +1,5 @@
 // Currency formatting/parsing in integer minor units.
+import { lang, locale } from "./i18n";
 
 export const CURRENCIES = [
   "THB", "USD", "EUR", "GBP", "JPY", "SGD", "MYR", "IDR", "VND", "PHP", "KRW", "CNY",
@@ -30,10 +31,11 @@ export function fractionDigits(currency: string): number {
 
 const fmtCache = new Map<string, Intl.NumberFormat>();
 export function formatMoney(minor: number, currency: string): string {
-  let f = fmtCache.get(currency);
+  const ck = `${lang()}|${currency}`;
+  let f = fmtCache.get(ck);
   if (!f) {
-    f = new Intl.NumberFormat(undefined, { style: "currency", currency });
-    fmtCache.set(currency, f);
+    f = new Intl.NumberFormat(locale(), { style: "currency", currency });
+    fmtCache.set(ck, f);
   }
   return f.format(minor / 10 ** fractionDigits(currency));
 }

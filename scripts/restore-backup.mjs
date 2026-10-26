@@ -19,7 +19,7 @@ const raw = fs.readFileSync(input);
 const file = JSON.parse((input.endsWith(".gz") ? zlib.gunzipSync(raw) : raw).toString("utf8"));
 if (file.version !== 1) throw new Error(`unsupported backup version ${file.version}`);
 
-const ORDER = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences"];
+const ORDER = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups"];
 const lit = (v) =>
   v === null || v === undefined ? "NULL" : typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
 const ident = (s) => {

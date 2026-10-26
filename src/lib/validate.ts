@@ -157,7 +157,7 @@ export interface BillInput {
   fx: Fx | null;
 }
 
-function memberList(v: unknown, field: string, memberIds: ReadonlySet<string>): string[] {
+export function memberList(v: unknown, field: string, memberIds: ReadonlySet<string>): string[] {
   if (!Array.isArray(v) || v.length < 1) fail(`${field} must be a non-empty array`);
   const seen = new Set<string>();
   for (const id of v) {

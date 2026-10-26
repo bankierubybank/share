@@ -80,6 +80,38 @@ Recurrence = { id; frequency: 'weekly'|'monthly'; nextDate; active; lastError: s
 | POST | `/api/groups/:gid/recurring` | `{ frequency, startDate, bill: BillBody-without-date }` | `201 { recurring, created }` (creates bills due up to today) |
 | DELETE | `/api/groups/:gid/recurring/:rid` | – | `204` stop (bills already created stay) |
 
+### v3 (app 0.3.0)
+
+```ts
+Comment  = { id; billId; authorMemberId: string | null; actor: string | null; body; createdAt }
+Subgroup = { id; name; memberIds: string[] }
+Bill.commentCount: number
+```
+
+| Method | Path | Body | 2xx |
+|--------|------|------|-----|
+| GET | `/api/groups/:gid/bills/:bid/comments` | – | `{ comments }` oldest first |
+| POST | `/api/groups/:gid/bills/:bid/comments` | `{ body: 1–500 chars (newlines kept), memberId? }` | `201 { comment }`; ≤200 per bill (409) |
+| DELETE | `/api/groups/:gid/bills/:bid/comments/:cid` | – | `204` |
+| GET | `/api/groups/:gid/subgroups` | – | `{ subgroups }` |
+| POST | `/api/groups/:gid/subgroups` | `{ name: 1–40, memberIds: string[] ≥1 }` | `201 { subgroup }`; ≤20 per group |
+| PUT | `/api/groups/:gid/subgroups/:sid` | same | `{ subgroup }` |
+| DELETE | `/api/groups/:gid/subgroups/:sid` | – | `204` (removing a member strips them from subgroups; empty subgroups are deleted) |
+| GET | `/api/groups/:gid/view-link` | – | `{ viewId: string \| null }` |
+| POST | `/api/groups/:gid/view-link` | `{}` | `201 { viewId }` — creates or **rotates** (old link stops working) |
+| DELETE | `/api/groups/:gid/view-link` | – | `204` revoke (allowed even when archived) |
+| GET | `/api/view/:viewId` | – | `{ group (no id), members (no promptpay), bills (no createdBy/receipt/recurrence), summary, readOnly: true }` |
+| POST | `/api/groups/:gid/bills/:bid/move` | `{ targetGroupId, addMissingMembers?: boolean }` | `{ bill, targetGroupId, addedMembers }` |
+| POST | `/api/groups/:gid/merge` | `{ sourceGroupId, addMissingMembers?: boolean }` | `{ moved, addedMembers, sourceArchived: true }` |
+
+Move/merge rules: members matched **by name, case-insensitive**; same currency required (400); target archived → 409;
+missing names → `409 { error: { code: "missing_members", missing: string[] } }` unless `addMissingMembers`.
+Moved bills keep id, payers, shares, split (remapped), comments (author link dropped); `recurrenceId` cleared.
+Merge moves all live bills from source → this group, stops the source's repeating bills, archives the source.
+Soft-deleted bills stay in the source.
+
+Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|moveIn`, `group.merge`.
+
 **Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
 Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|rename|promptpay|remove`,

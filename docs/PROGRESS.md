@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-26_
 
-## Status: v0.2.0 live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
+## Status: v0.3.0 live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
 
 | Area | State |
 |------|-------|
@@ -12,10 +12,10 @@ _Last updated: 2026-10-26_
 | Security headers, CSRF content-type gate, body cap, optional Access JWT | ✅ |
 | Material 3 SPA: home, group (bills/summary/people), bill dialog, settle-up | ✅ |
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
-| Tests: unit 97, integration 104, system 29, security 79 (+1 prod-only), E2E 31×4 browsers (124) | ✅ local 2026-10-26 |
+| Tests: unit 143, integration 152, system 31, security 106 (+1 prod-only), E2E 46×4 browsers (184) | ✅ local 2026-10-26 (v0.3.0) |
 | Firefox compat | ⚠️ browser won't launch on this host (ISSUES #1) |
 | Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
-| Prod tests via Access service token: system 29, security 80, E2E 62 (Chromium + iPhone) | ✅ 2026-10-26 (v0.2.0, version f3e6d320) |
+| Prod tests via Access service token: system 31, security 107, E2E 92 (Chromium + iPhone) | ✅ 2026-10-26 (v0.3.0, version 0fc167c6) |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
 | Demo trip "Phuket trip" on prod: /g/bT3gqiknUCsOAW1r_2za5A | ✅ |
 | Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |
@@ -52,7 +52,23 @@ _Last updated: 2026-10-26_
 | 23 | Self-host fonts | ✅ (+ SVG icons; CSP self-only) |
 | 25 | Nightly D1 backup to R2 | ✅ (+ restore script) |
 
+## v0.3 feature status (second round)
+
+| # | Item | State |
+|---|------|-------|
+| 4 | Comments on a bill | ✅ |
+| 6 | "Everyone except…" + saved subgroups | ✅ (quick picks) |
+| 8 | Partial settle + settle-up history | ✅ |
+| 10 | Move bill / merge groups | ✅ |
+| 11 | Trip stats | ✅ |
+| 12 | Read-only share link | ✅ (/v/<id>) |
+| 14 | Thai language | ✅ |
+| 16 | Swipe / long-press / pull-to-refresh | ✅ (+ Duplicate button) |
+| 17 | Onboarding (sample data + tips) | ✅ |
+| 18 | Smaller bundle (lazy chunks) | ✅ home JS −32% |
+
 ## Next ideas (backlog)
-- Not picked yet: #16 PWA/offline, #18 Thai i18n, #19 live refresh, #22 in-Worker Access JWT, #24 rate limiting,
-  #26 staging environment, #27 git remote + CI.
+- Not picked yet (round-2 list): #1 live FX rates, #2 receipt scan (Workers AI), #3 budgets, #5 bill templates,
+  #7 reminders (email/LINE), #9 import Splitwise/KittySplit, #13 PWA/offline, #15 live refresh, #19 in-Worker Access JWT,
+  #20 rate limiting, #21 staging, #22 git remote + CI, #23 error tracking/uptime, #24 restore drill, #25 Firefox in matrix.
 - Live exchange rates (needs an external FX source).

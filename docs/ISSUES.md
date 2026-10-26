@@ -19,4 +19,9 @@
 | 15 | fixed 2026-10-26 | ui | Material buttons in `<form>` default to submit (steppers/"Several people paid" submitted the bill). |
 | 16 | fixed 2026-10-26 | ui | Payment dialog lost its From select; PromptPay QR hidden until md-select first render. |
 | 17 | fixed 2026-10-26 | ui | md-menu stuck after first use (close animation `scale(Infinity)`); menus/selects use `quick`. |
+| 19 | fixed 2026-10-26 | security | Merge put the source group's id (its edit secret) into the target's activity `entityId`. Now null. Regression test in `test/security/v3-security.test.ts`. |
+| 20 | fixed 2026-10-26 | bug | Comment length counted UTF-16 units; now code points. |
+| 21 | fixed 2026-10-26 | ui | Read-only view showed the laptop "Add bill" button; Duplicate stacked two dialogs. |
+| 22 | note | design | Move/merge authorization = possession of both group ids (KittySplit model); members matched by name. |
+| 23 | note | test | On prod, Cloudflare's edge answers some malformed URLs (e.g. `/api/view/%00`) with 400 before the Worker; tests accept 400 or 404 (never 2xx/5xx). |
 | 18 | note | test | WebKit: md-dialog needs `autofocus` attr (script focus doesn't stick). E2E waits for `data-ready` on dialogs and for the re-render after saves. |
