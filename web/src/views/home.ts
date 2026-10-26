@@ -3,6 +3,7 @@ import { clear, h, icon, snackbar } from "../dom";
 import { CURRENCIES, defaultCurrency } from "../money";
 import { forgetGroup, recentGroups } from "../store";
 import { navigate } from "../router";
+import { themeButton } from "../theme";
 
 type TextField = HTMLElement & { value: string; error: boolean; errorText: string; reportValidity(): boolean };
 
@@ -18,9 +19,7 @@ export function renderHome(root: HTMLElement) {
     dataset: { testid: "group-name" },
   }) as TextField;
 
-  const currency = h(
-    "md-outlined-select",
-    { label: "Currency", dataset: { testid: "group-currency" } },
+  const currency = h("md-outlined-select", { quick: true, label: "Currency", dataset: { testid: "group-currency" } },
     CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === defaultCurrency() }, h("div", { slot: "headline" }, c))),
   ) as HTMLElement & { value: string };
 
@@ -37,7 +36,7 @@ export function renderHome(root: HTMLElement) {
     },
   }) as TextField;
   memberField.append(
-    h("md-icon-button", { slot: "trailing-icon", "aria-label": "Add person", onclick: () => addMember(), dataset: { testid: "member-add" } }, icon("person_add")),
+    h("md-icon-button", { type: "button", slot: "trailing-icon", "aria-label": "Add person", onclick: () => addMember(), dataset: { testid: "member-add" } }, icon("person_add")),
   );
 
   const chips = h("md-chip-set", { class: "member-chips", dataset: { testid: "member-chips" } });
@@ -123,7 +122,8 @@ export function renderHome(root: HTMLElement) {
     h("div", { class: "row end" }, createBtn),
   );
 
-  const recent = recentGroups();
+  // Archived groups sink to the bottom.
+  const recent = recentGroups().sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
   const recentList = h(
     "md-list",
     { dataset: { testid: "recent-groups" } },
@@ -132,8 +132,8 @@ export function renderHome(root: HTMLElement) {
         "md-list-item",
         { type: "link", href: `/g/${g.id}`, onclick: (e: Event) => { e.preventDefault(); navigate(`/g/${g.id}`); } },
         h("div", { slot: "headline" }, g.name),
-        h("div", { slot: "supporting-text" }, g.currency),
-        icon("groups", "start"),
+        h("div", { slot: "supporting-text" }, g.archived ? `${g.currency} · Archived` : g.currency),
+        icon(g.archived ? "archive" : "groups", "start"),
         h(
           "md-icon-button",
           {
@@ -158,10 +158,11 @@ export function renderHome(root: HTMLElement) {
       "header",
       { class: "top-app-bar" },
       h("div", { class: "brand" }, icon("receipt_long"), h("span", { class: "md-typescale-title-large" }, "Share")),
+      h("div", { class: "actions push-right" }, themeButton()),
     ),
     h(
       "main",
-      { class: "page home" },
+      { class: "page home", id: "main" },
       h(
         "section",
         { class: "hero" },

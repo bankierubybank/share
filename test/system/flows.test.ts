@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { api, makeGroup, today } from "../helpers/http";
+import { afterAll, describe, expect, it } from "vitest";
+import { api, cleanupGroups, makeGroup, today } from "../helpers/http";
+
+afterAll(cleanupGroups);
 
 type Settlement = { from: string; to: string; amount: number };
 type Balance = { memberId: string; paid: number; owed: number; net: number };

@@ -10,5 +10,5 @@
     "isolatedModules": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["web/src", "test/system", "test/security", "test/e2e", "test/helpers", "playwright.config.ts"]
+  "include": ["web/src", "test/unit/web", "test/system", "test/security", "test/e2e", "test/helpers", "playwright.config.ts"]
 }

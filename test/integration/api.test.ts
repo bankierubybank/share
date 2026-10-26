@@ -96,7 +96,7 @@ describe("members", () => {
 
     const ren = await call("PATCH", `/api/groups/${gid}/members/${mid}`, { name: "David" });
     expect(ren.status).toBe(200);
-    expect(ren.json.member).toEqual({ id: mid, name: "David" });
+    expect(ren.json.member).toEqual({ id: mid, name: "David", promptpay: null });
 
     expect((await call("DELETE", `/api/groups/${gid}/members/${mid}`)).status).toBe(204);
     const g = await call("GET", `/api/groups/${gid}`);
@@ -215,16 +215,21 @@ describe("bills", () => {
     expect(g.json.bills[0].shares).toEqual([{ memberId: ids.Carol, amount: 500 }]);
   });
 
-  it("DELETE removes the bill and cascades bill_shares", async () => {
+  it("DELETE soft-deletes (restorable); purge cascades bill_shares", async () => {
     const { gid, ids } = await makeGroup();
     const created = await addBill(gid, { amount: 900, paidBy: ids.Alice, split: equal([ids.Alice, ids.Bob, ids.Carol]) });
     const bid = created.json.bill.id;
     const before = await env.DB.prepare("SELECT COUNT(*) AS n FROM bill_shares WHERE bill_id = ?").bind(bid).first<{ n: number }>();
     expect(before?.n).toBe(3);
     expect((await call("DELETE", `/api/groups/${gid}/bills/${bid}`)).status).toBe(204);
+    // Soft delete: hidden from lists, shares kept for restore.
+    expect((await call("GET", `/api/groups/${gid}`)).json.bills).toEqual([]);
+    const kept = await env.DB.prepare("SELECT COUNT(*) AS n FROM bill_shares WHERE bill_id = ?").bind(bid).first<{ n: number }>();
+    expect(kept?.n).toBe(3);
+    // Hard delete (what the 30-day purge does) cascades.
+    await env.DB.prepare("DELETE FROM bills WHERE id = ?").bind(bid).run();
     const after = await env.DB.prepare("SELECT COUNT(*) AS n FROM bill_shares WHERE bill_id = ?").bind(bid).first<{ n: number }>();
     expect(after?.n).toBe(0);
-    expect((await call("GET", `/api/groups/${gid}`)).json.bills).toEqual([]);
     expect((await call("DELETE", `/api/groups/${gid}/bills/${bid}`)).status).toBe(404);
     expect((await call("PUT", `/api/groups/${gid}/bills/${bid}`, {})).status).toBe(404);
   });

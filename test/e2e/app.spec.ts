@@ -41,13 +41,14 @@ async function pickOption(page: Page, selectTestId: string, label: string) {
 async function addEqualBill(page: Page, desc: string, amount: string, paidBy: string, exclude: string[] = []) {
   await addBillBtn(page).click();
   const dialog = page.getByTestId("bill-dialog");
-  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("data-ready", "1");
   await fill(page, "bill-description", desc);
   await fill(page, "bill-amount", amount);
   await pickOption(page, "bill-paid-by", paidBy);
   for (const p of exclude) await page.getByTestId(`split-check-${p}`).click();
   await page.getByTestId("bill-save").click();
   await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("bill-item").filter({ hasText: desc }).first()).toBeAttached(); // re-render done
 }
 
 test("create group, add bill, see who owes whom", async ({ page }) => {
@@ -88,11 +89,11 @@ test("exact split validates the total", async ({ page }) => {
   await page.getByTestId("mode-exact").click();
   await fill(page, "split-exact-Ann", "30");
   await fill(page, "split-exact-Ben", "60");
-  await expect(page.getByTestId("split-status")).toContainText("left to assign");
+  await expect(page.getByTestId("split-status")).toContainText("Amounts add up to");
   await page.getByTestId("bill-save").click();
-  await expect(page.getByTestId("bill-dialog")).toContainText("must add up");
+  await expect(page.getByTestId("bill-dialog")).toContainText("the bill is");
   await fill(page, "split-exact-Ben", "70");
-  await expect(page.getByTestId("split-status")).toContainText("assigned");
+  await expect(page.getByTestId("split-status")).toContainText("2 people");
   await page.getByTestId("bill-save").click();
   await expect(page.getByTestId("bill-dialog")).toHaveCount(0);
   await showPanel(page, "summary");
@@ -119,8 +120,9 @@ test("edit and delete a bill", async ({ page }) => {
 test("manage people", async ({ page }) => {
   await createGroup(page, `People ${uniq()}`, ["Ann", "Ben"]);
   await showPanel(page, "members");
-  await fill(page, "add-member-input", "Dao");
   await page.getByTestId("add-member-btn").click();
+  await fill(page, "member-name-input", "Dao");
+  await page.getByTestId("member-save").click();
   await expect(page.getByTestId("member-item")).toHaveCount(3);
 
   await page.getByTestId("remove-member-Dao").click();

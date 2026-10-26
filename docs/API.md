@@ -1,9 +1,10 @@
-# API Contract (v1)
+# API Contract (v2 — app 0.2.0)
 
-Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD`.
+Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 
-Write requests (`POST/PUT/PATCH/DELETE`) with a body **must** send `Content-Type: application/json`, else `415`.
-Body limit 32 KiB → `413`. Errors: `{ "error": { "code": string, "message": string } }`.
+Write requests (`POST/PUT/PATCH`) with a body **must** send `Content-Type: application/json`, else `415`.
+Body limit 32 KiB → `413`. Exception: receipt upload (`PUT …/receipt`) takes a raw `image/jpeg|png|webp` body ≤ 2 MiB.
+Errors: `{ "error": { "code": string, "message": string } }`.
 
 | Status | code |
 |--------|------|
@@ -11,53 +12,83 @@ Body limit 32 KiB → `413`. Errors: `{ "error": { "code": string, "message": st
 | 401 | `unauthorized` (Access JWT required/invalid, only when Access check enabled) |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `conflict` (e.g. delete member still used by bills) |
+| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
 
 ## Types
 
 ```ts
-Group   = { id: string; name: string; currency: string; createdAt: string }
-Member  = { id: string; name: string }
-Share   = { memberId: string; amount: number }           // minor units owed by member
-Bill    = { id: string; kind: 'expense' | 'payment'; description: string; amount: number;
-            paidBy: string; date: string; splitMode: 'equal' | 'exact'; shares: Share[]; createdAt: string }
-Split   = { mode: 'equal'; members: string[] }            // >=1 member ids
-        | { mode: 'exact'; shares: Share[] }              // sum(amount) === bill.amount
-Balance = { memberId: string; paid: number; owed: number; net: number }
-// paid/owed = expenses only; net = paid - owed + payments sent - payments received (+ = is owed money)
-Settlement = { from: string; to: string; amount: number } // `from` pays `to`
+Group   = { id; name; currency; archived: boolean; createdAt }
+Member  = { id; name; promptpay: string | null }        // normalized PromptPay id (10/13/15 digits)
+Share   = { memberId: string; amount: number }
+Category = 'food'|'groceries'|'lodging'|'transport'|'activities'|'shopping'|'utilities'|'other'
+Split   = { mode: 'equal';    members: string[] }                         // remainder → first in order
+        | { mode: 'exact';    shares: Share[] }                           // sum == amount
+        | { mode: 'shares';   weights: { memberId; weight: int 0..10000 }[] }   // ≥1 weight > 0
+        | { mode: 'percent';  percents: { memberId; bp: int 0..10000 }[] }      // sum bp == 10000 (100%)
+        | { mode: 'itemized'; items: { description; amount; members: string[] }[];  // ≤100 items
+                              serviceBp?: int 0..10000; taxBp?: int 0..10000 }      // service then tax, compounding
+Fx      = { currency: string; amount: number /* minor units of fx.currency */; rate: string /* "36.25", ≤8 dp */ }
+Bill    = { id; kind: 'expense'|'payment'; description; amount; paidBy /* first payer */; payers: Share[];
+            date; category: Category; splitMode; split: Split /* normalized, for editing */; shares: Share[];
+            fx: Fx | null; hasReceipt: boolean; recurrenceId: string | null; createdBy: string | null;
+            createdAt; updatedAt }
+Balance = { memberId; paid; owed; net }   // paid/owed = expenses only; net also includes payments
+Settlement = { from; to; amount }
+Activity = { id; at; actor: string | null; action; entityId: string | null; detail: object | null; restorable: boolean }
+Recurrence = { id; frequency: 'weekly'|'monthly'; nextDate; active; lastError: string | null;
+               template: BillBody-without-date; createdBy; createdAt }
 ```
 
-Limits: group/member name 1–60 chars (trimmed), description 1–120, currency = 3 uppercase letters,
-amount 1 … 100,000,000,000, members per group ≤ 50, bills per group ≤ 5000.
+### Bill body (POST / PUT)
+```ts
+{ kind?: 'expense'|'payment', description, date, category?: Category, split: Split,
+  amount?: number,                       // required unless computed (itemized / fx); if sent with computed, must match
+  paidBy?: string | payers?: Share[],    // one of them; payers sum must == amount
+  fx?: Fx }                              // amount = round_half_up(fx.amount × rate) converted between currency digits
+```
+- Itemized: amount = round_half_up(subtotal × (1+service) × (1+tax)); per-member subtotals (items split equally),
+  then the total is spread proportionally (largest remainder). Itemized + fx → 400.
+- shares/percent: largest-remainder allocation; ties → earlier entry. Zero shares are dropped.
+- Payment: single payer, `split = { mode:'equal', members:[receiver] }`, receiver ≠ payer.
+- `shares`/`payers` returned in member display order.
 
 ## Endpoints
 
-| Method | Path | Body | 2xx response |
-|--------|------|------|--------------|
-| GET | `/api/health` | – | `200 { ok: true, version }` |
-| POST | `/api/groups` | `{ name, currency, members: string[] }` (1–50 names, unique case-insensitive) | `201 { group, members }` |
-| GET | `/api/groups/:gid` | – | `200 { group, members, bills }` (bills newest date first) |
-| PATCH | `/api/groups/:gid` | `{ name?, currency? }` | `200 { group }` |
-| POST | `/api/groups/:gid/members` | `{ name }` | `201 { member }` (409 if duplicate name) |
-| PATCH | `/api/groups/:gid/members/:mid` | `{ name }` | `200 { member }` |
-| DELETE | `/api/groups/:gid/members/:mid` | – | `204` (409 if member paid or shares any bill) |
-| POST | `/api/groups/:gid/bills` | `{ kind?, description, amount, paidBy, date, split: Split }` | `201 { bill }` |
-| PUT | `/api/groups/:gid/bills/:bid` | same as POST | `200 { bill }` |
-| DELETE | `/api/groups/:gid/bills/:bid` | – | `204` |
-| GET | `/api/groups/:gid/summary` | – | `200 { balances: Balance[], settlements: Settlement[], total: number }` |
+| Method | Path | Body | 2xx |
+|--------|------|------|-----|
+| GET | `/api/health` | – | `{ ok, version }` |
+| GET | `/api/me` | – | `{ actor: string \| null }` (Access email, `"service token"`, or null) |
+| POST | `/api/groups` | `{ name, currency, members: string[] }` | `201 { group, members }` |
+| GET | `/api/groups/:gid` | – | `{ group, members, bills }` (live bills, newest first; materializes due recurring bills) |
+| PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
+| DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
+| POST | `/api/groups/:gid/members` | `{ name, promptpay? }` | `201 { member }` |
+| PATCH | `/api/groups/:gid/members/:mid` | `{ name?, promptpay?: string \| null }` | `{ member }` |
+| DELETE | `/api/groups/:gid/members/:mid` | – | `204`; 409 if on a live bill or active recurring bill |
+| POST | `/api/groups/:gid/bills` | Bill body | `201 { bill }` |
+| PUT | `/api/groups/:gid/bills/:bid` | Bill body | `{ bill }` |
+| DELETE | `/api/groups/:gid/bills/:bid` | – | `204` **soft delete** (purged after 30 days) |
+| POST | `/api/groups/:gid/bills/:bid/restore` | – | `{ bill }`; 404 if not deleted |
+| PUT | `/api/groups/:gid/bills/:bid/receipt` | raw image | `201 { ok }`; magic-byte checked; replaces previous |
+| GET | `/api/groups/:gid/bills/:bid/receipt` | – | image (`Content-Security-Policy: default-src 'none'; sandbox`) |
+| DELETE | `/api/groups/:gid/bills/:bid/receipt` | – | `204` |
+| GET | `/api/groups/:gid/summary` | – | `{ balances, settlements, total, byCategory: Record<Category, number> }` |
+| GET | `/api/groups/:gid/activity?limit=50&before=<iso>` | – | `{ activity: Activity[] }` newest first, limit 1–100 |
+| GET | `/api/groups/:gid/recurring` | – | `{ recurring: Recurrence[] }` |
+| POST | `/api/groups/:gid/recurring` | `{ frequency, startDate, bill: BillBody-without-date }` | `201 { recurring, created }` (creates bills due up to today) |
+| DELETE | `/api/groups/:gid/recurring/:rid` | – | `204` stop (bills already created stay) |
 
-`kind: 'payment'` = settle-up record: `paidBy` = payer, split must be exactly one member (the receiver) and
-not the payer. `total` in summary = sum of `expense` bills only.
+**Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
-### Split rules
-- Returned `bill.shares` are ordered by member display order (members' `position`).
-- `equal`: amount ÷ n; remainder cents go one each to members in the order given in `split.members`
-  (frontend sends them in member display order). Duplicates rejected.
-- `exact`: each share ≥ 0, member ids unique and in group, sum == amount.
-- Payer need not be in the split.
+Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|rename|promptpay|remove`,
+`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`.
+
+## Scheduled (daily 00:17 UTC)
+1. Backup all tables → R2 `share-backups/backups/YYYY-MM-DD.json.gz` (keep 30 days). Restore: `scripts/restore-backup.mjs`.
+2. Materialize due recurring bills (monthly keeps anchor day, clamped; weekly +7d). Invalid template → deactivated with `lastError`.
+3. Purge bills soft-deleted > 30 days (and their receipts).
 
 ### Settlement algorithm
 Greedy: sort creditors and debtors by |net| desc (tie → member id), match largest debtor with

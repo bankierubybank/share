@@ -1,3 +1,5 @@
+import { ICONS, type IconName } from "./icons";
+
 // Tiny DOM builder. User data only ever goes through text nodes / properties — never innerHTML.
 
 type Child = Node | string | number | null | undefined | false | Child[];
@@ -29,7 +31,22 @@ function append(el: Node, children: Child[]) {
   }
 }
 
-export const icon = (name: string, slot?: string) => h("md-icon", slot ? { slot } : null, name);
+const svgCache = new Map<IconName, SVGElement>();
+
+/** Material Symbol as inline SVG (trusted bundled asset, parsed — never user data). Decorative: aria-hidden. */
+export function icon(name: IconName, slot?: string) {
+  let svg = svgCache.get(name);
+  if (!svg) {
+    svg = new DOMParser().parseFromString(ICONS[name], "image/svg+xml").documentElement as unknown as SVGElement;
+    svg.setAttribute("fill", "currentColor");
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svgCache.set(name, svg);
+  }
+  const el = h("md-icon", { "aria-hidden": "true", ...(slot ? { slot } : {}) });
+  el.appendChild(svg.cloneNode(true));
+  return el;
+}
 
 export function clear(el: Element, ...children: Child[]) {
   el.replaceChildren();

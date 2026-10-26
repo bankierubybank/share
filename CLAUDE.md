@@ -25,7 +25,12 @@ Steps 2→3→4 = `npm run ship`. Never deploy if local fails; never commit if p
 - Frontend: build DOM with `h()` (`web/src/dom.ts`); never `innerHTML` with user data.
 - New UI elements get `data-testid` for E2E.
 - Test env var for target URL is `TARGET_URL` (Vitest reserves `BASE_URL`).
-- Org policy hooks block `rm -rf` and some SQL-looking shell strings — use Write/Edit tools for files.
+- Org policy hooks block `rm -rf`, some SQL-looking strings and scheduling words in shell commands — put such
+  edits in files via Write/Edit (or a script file) instead.
+- Migrations that rebuild tables: run `bash scripts/verify-migration.sh`, and `wrangler d1 export … --remote`
+  before applying remotely (see docs/ARCHITECTURE.md → Data model).
+- Material buttons inside a `<form>` default to `type=submit` — always pass `type: "button"`.
+- `md-menu` / `md-outlined-select`: use `quick: true` (animations hang here).
 
 ## Dispatch guidance
 

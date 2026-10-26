@@ -74,6 +74,13 @@ describe("computeBalances", () => {
     expect(b.map((x) => x.net)).toEqual([700, -700]);
     expect(b.map((x) => x.paid)).toEqual([1000, 0]);
   });
+  it("multiple payers each get credit", () => {
+    const b = computeBalances(
+      ["a", "b", "c"],
+      [{ amount: 900, payers: [{ memberId: "a", amount: 600 }, { memberId: "b", amount: 300 }], shares: splitEqual(900, ["a", "b", "c"]) }],
+    );
+    expect(b.map((x) => [x.paid, x.net])).toEqual([[600, 300], [300, 0], [0, -300]]);
+  });
   it("includes members with no activity", () => {
     expect(computeBalances(["a"], [])).toEqual([{ memberId: "a", paid: 0, owed: 0, net: 0 }]);
   });

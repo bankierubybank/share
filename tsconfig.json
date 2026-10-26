@@ -10,5 +10,7 @@
     "isolatedModules": true,
     "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["src", "test/integration", "test/unit", "worker-configuration.d.ts"]
+  "include": ["src", "test/integration", "test/unit", "worker-configuration.d.ts"],
+  // Unit tests of browser modules are typechecked by tsconfig.web.json.
+  "exclude": ["test/unit/web"]
 }

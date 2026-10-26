@@ -1,5 +1,7 @@
 import type { Share } from "./money";
 import { splitEqual } from "./money";
+import { allocate, convertAmount, currencyDigits, RATE_RE, splitItemized } from "./split";
+import { normalizePromptPayId } from "./promptpay-id";
 
 export const LIMITS = {
   nameMax: 60,
@@ -7,7 +9,13 @@ export const LIMITS = {
   amountMax: 100_000_000_000,
   membersPerGroup: 50,
   billsPerGroup: 5000,
+  itemsPerBill: 100,
+  recurrencesPerGroup: 20,
+  weightMax: 10_000,
 } as const;
+
+export const CATEGORIES = ["food", "groceries", "lodging", "transport", "activities", "shopping", "utilities", "other"] as const;
+export type Category = (typeof CATEGORIES)[number];
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -32,8 +40,8 @@ export function cleanName(v: unknown, field = "name", max: number = LIMITS.nameM
   return s;
 }
 
-export function cleanCurrency(v: unknown): string {
-  if (typeof v !== "string" || !/^[A-Z]{3}$/.test(v)) fail("currency must be a 3-letter ISO code");
+export function cleanCurrency(v: unknown, field = "currency"): string {
+  if (typeof v !== "string" || !/^[A-Z]{3}$/.test(v)) fail(`${field} must be a 3-letter ISO code`);
   return v;
 }
 
@@ -43,11 +51,24 @@ export function cleanAmount(v: unknown, field = "amount", allowZero = false): nu
   return v;
 }
 
-export function cleanDate(v: unknown): string {
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) fail("date must be YYYY-MM-DD");
-  const d = new Date(`${v}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) fail("date is not a valid date");
+function cleanInt(v: unknown, field: string, min: number, max: number): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < min || v > max) fail(`${field} must be an integer ${min}–${max}`);
   return v;
+}
+
+export function cleanDate(v: unknown, field = "date"): string {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) fail(`${field} must be YYYY-MM-DD`);
+  const d = new Date(`${v}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) fail(`${field} is not a valid date`);
+  return v;
+}
+
+function cleanPromptPay(v: unknown): string | null {
+  if (v === null || v === "") return null;
+  if (typeof v !== "string") fail("promptpay must be a string");
+  const id = normalizePromptPayId(v);
+  if (!id) fail("promptpay must be a 10-digit mobile, 13-digit ID or 15-digit e-wallet number");
+  return id;
 }
 
 export interface NewGroupInput {
@@ -73,11 +94,21 @@ export function parseNewGroup(body: unknown): NewGroupInput {
   return { name, currency, members };
 }
 
-export function parseGroupPatch(body: unknown): { name?: string; currency?: string } {
+export interface GroupPatch {
+  name?: string;
+  currency?: string;
+  archived?: boolean;
+}
+
+export function parseGroupPatch(body: unknown): GroupPatch {
   if (!isObj(body)) fail("body must be an object");
-  const out: { name?: string; currency?: string } = {};
+  const out: GroupPatch = {};
   if (body.name !== undefined) out.name = cleanName(body.name);
   if (body.currency !== undefined) out.currency = cleanCurrency(body.currency);
+  if (body.archived !== undefined) {
+    if (typeof body.archived !== "boolean") fail("archived must be a boolean");
+    out.archived = body.archived;
+  }
   if (!Object.keys(out).length) fail("nothing to update");
   return out;
 }
@@ -87,64 +118,217 @@ export function parseMemberName(body: unknown): string {
   return cleanName(body.name);
 }
 
+export interface MemberInput {
+  name?: string;
+  promptpay?: string | null;
+}
+
+/** For POST (name required) and PATCH (any of name / promptpay). */
+export function parseMember(body: unknown, requireName: boolean): MemberInput {
+  if (!isObj(body)) fail("body must be an object");
+  const out: MemberInput = {};
+  if (body.name !== undefined || requireName) out.name = cleanName(body.name);
+  if (body.promptpay !== undefined) out.promptpay = cleanPromptPay(body.promptpay);
+  if (!Object.keys(out).length) fail("nothing to update");
+  return out;
+}
+
+// ---------- bills ----------
+
+export type SplitMode = "equal" | "exact" | "shares" | "percent" | "itemized";
+
+export interface Fx {
+  currency: string;
+  amount: number;
+  rate: string;
+}
+
 export interface BillInput {
   kind: "expense" | "payment";
   description: string;
   amount: number;
-  paidBy: string;
+  payers: Share[];
   date: string;
-  splitMode: "equal" | "exact";
+  category: Category;
+  splitMode: SplitMode;
+  /** Normalized split as sent (for editing). */
+  split: Record<string, unknown>;
   shares: Share[];
+  fx: Fx | null;
 }
 
-/** Validates bill body and resolves split into concrete shares. `memberIds` = members of the group. */
-export function parseBill(body: unknown, memberIds: ReadonlySet<string>): BillInput {
+function memberList(v: unknown, field: string, memberIds: ReadonlySet<string>): string[] {
+  if (!Array.isArray(v) || v.length < 1) fail(`${field} must be a non-empty array`);
+  const seen = new Set<string>();
+  for (const id of v) {
+    if (typeof id !== "string" || !memberIds.has(id)) fail(`${field} contains an unknown member`);
+    if (seen.has(id)) fail(`${field} contains duplicates`);
+    seen.add(id);
+  }
+  return v as string[];
+}
+
+function memberEntries<T>(
+  v: unknown,
+  field: string,
+  memberIds: ReadonlySet<string>,
+  value: (e: Record<string, unknown>) => T,
+): { memberId: string; value: T }[] {
+  if (!Array.isArray(v) || v.length < 1) fail(`${field} must be a non-empty array`);
+  const seen = new Set<string>();
+  return v.map((e) => {
+    if (!isObj(e)) fail(`each ${field} entry must be an object`);
+    if (typeof e.memberId !== "string" || !memberIds.has(e.memberId)) fail(`${field} contains an unknown member`);
+    if (seen.has(e.memberId)) fail(`${field} contains duplicates`);
+    seen.add(e.memberId);
+    return { memberId: e.memberId, value: value(e) };
+  });
+}
+
+const positive = (shares: Share[]) => shares.filter((s) => s.amount > 0);
+
+/**
+ * Validates a bill body and resolves the split into concrete shares.
+ * Amount rules: itemized → computed from items; fx → converted from fx.amount; otherwise `amount`.
+ * When computed, a provided `amount` must match (lets clients show the same number first).
+ */
+export function parseBill(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string): BillInput {
   if (!isObj(body)) fail("body must be an object");
   const kind = body.kind === undefined ? "expense" : body.kind;
   if (kind !== "expense" && kind !== "payment") fail("kind must be 'expense' or 'payment'");
   const description = cleanName(body.description, "description", LIMITS.descriptionMax);
-  const amount = cleanAmount(body.amount);
-  if (typeof body.paidBy !== "string" || !memberIds.has(body.paidBy)) fail("paidBy must be a member of the group");
-  const paidBy = body.paidBy;
   const date = cleanDate(body.date);
+  const category = (body.category === undefined ? "other" : body.category) as Category;
+  if (!CATEGORIES.includes(category)) fail(`category must be one of ${CATEGORIES.join(", ")}`);
   const split = body.split;
   if (!isObj(split)) fail("split is required");
 
+  // fx (multi-currency)
+  let fx: Fx | null = null;
+  if (body.fx !== undefined && body.fx !== null) {
+    if (!isObj(body.fx)) fail("fx must be an object");
+    const currency = cleanCurrency(body.fx.currency, "fx.currency");
+    if (currency === groupCurrency) fail("fx.currency must differ from the group currency");
+    const amount = cleanAmount(body.fx.amount, "fx.amount");
+    if (typeof body.fx.rate !== "string" || !RATE_RE.test(body.fx.rate) || /^0(\.0*)?$/.test(body.fx.rate))
+      fail("fx.rate must be a positive decimal string with at most 8 decimals");
+    fx = { currency, amount, rate: body.fx.rate };
+  }
+
+  let amount: number;
   let shares: Share[];
-  let splitMode: "equal" | "exact";
-  if (split.mode === "equal") {
-    splitMode = "equal";
-    if (!Array.isArray(split.members) || split.members.length < 1) fail("split.members must be a non-empty array");
-    const ids = split.members as unknown[];
-    const seen = new Set<string>();
-    for (const id of ids) {
-      if (typeof id !== "string" || !memberIds.has(id)) fail("split.members contains an unknown member");
-      if (seen.has(id)) fail("split.members contains duplicates");
-      seen.add(id);
-    }
-    shares = splitEqual(amount, ids as string[]);
-  } else if (split.mode === "exact") {
-    splitMode = "exact";
-    if (!Array.isArray(split.shares) || split.shares.length < 1) fail("split.shares must be a non-empty array");
-    const seen = new Set<string>();
-    shares = (split.shares as unknown[]).map((s) => {
-      if (!isObj(s)) fail("each share must be an object");
-      if (typeof s.memberId !== "string" || !memberIds.has(s.memberId)) fail("split.shares contains an unknown member");
-      if (seen.has(s.memberId)) fail("split.shares contains duplicates");
-      seen.add(s.memberId);
-      return { memberId: s.memberId, amount: cleanAmount(s.amount, "share amount", true) };
+  let mode: SplitMode;
+  let normSplit: Record<string, unknown>;
+
+  const computedAmount = (computed: number) => {
+    if (body.amount !== undefined && body.amount !== computed) fail(`amount must equal the computed total (${computed})`);
+    return cleanAmount(computed, "computed amount");
+  };
+
+  if (split.mode === "itemized") {
+    if (fx) fail("itemized bills must be in the group currency");
+    if (!Array.isArray(split.items) || split.items.length < 1) fail("split.items must be a non-empty array");
+    if (split.items.length > LIMITS.itemsPerBill) fail(`at most ${LIMITS.itemsPerBill} items`);
+    const items = split.items.map((it, i) => {
+      if (!isObj(it)) fail("each item must be an object");
+      return {
+        description: cleanName(it.description, `item ${i + 1} description`, LIMITS.descriptionMax),
+        amount: cleanAmount(it.amount, `item ${i + 1} amount`),
+        members: memberList(it.members, `item ${i + 1} members`, memberIds),
+      };
     });
-    const sum = shares.reduce((a, s) => a + s.amount, 0);
-    if (sum !== amount) fail(`shares sum (${sum}) must equal amount (${amount})`);
-    shares = shares.filter((s) => s.amount > 0);
-    if (!shares.length) fail("at least one share must be positive");
+    const serviceBp = split.serviceBp === undefined ? 0 : cleanInt(split.serviceBp, "split.serviceBp", 0, 10000);
+    const taxBp = split.taxBp === undefined ? 0 : cleanInt(split.taxBp, "split.taxBp", 0, 10000);
+    const r = splitItemized(items, serviceBp, taxBp);
+    amount = computedAmount(r.total);
+    shares = positive(r.shares);
+    mode = "itemized";
+    normSplit = { mode, items, serviceBp, taxBp };
   } else {
-    fail("split.mode must be 'equal' or 'exact'");
+    amount = fx
+      ? computedAmount(convertAmount(fx.amount, currencyDigits(fx.currency), currencyDigits(groupCurrency), fx.rate))
+      : cleanAmount(body.amount);
+    if (split.mode === "equal") {
+      const members = memberList(split.members, "split.members", memberIds);
+      shares = splitEqual(amount, members);
+      mode = "equal";
+      normSplit = { mode, members };
+    } else if (split.mode === "exact") {
+      const e = memberEntries(split.shares, "split.shares", memberIds, (x) => cleanAmount(x.amount, "share amount", true));
+      shares = e.map((x) => ({ memberId: x.memberId, amount: x.value }));
+      const sum = shares.reduce((a, s) => a + s.amount, 0);
+      if (sum !== amount) fail(`shares sum (${sum}) must equal amount (${amount})`);
+      shares = positive(shares);
+      mode = "exact";
+      normSplit = { mode, shares };
+    } else if (split.mode === "shares") {
+      const e = memberEntries(split.weights, "split.weights", memberIds, (x) => cleanInt(x.weight, "weight", 0, LIMITS.weightMax));
+      if (e.every((x) => x.value === 0)) fail("at least one weight must be positive");
+      const parts = allocate(amount, e.map((x) => x.value));
+      shares = positive(e.map((x, i) => ({ memberId: x.memberId, amount: parts[i] })));
+      mode = "shares";
+      normSplit = { mode, weights: e.map((x) => ({ memberId: x.memberId, weight: x.value })) };
+    } else if (split.mode === "percent") {
+      const e = memberEntries(split.percents, "split.percents", memberIds, (x) => cleanInt(x.bp, "percent (bp)", 0, 10000));
+      const total = e.reduce((a, x) => a + x.value, 0);
+      if (total !== 10000) fail(`percents must add up to 100% (got ${total / 100}%)`);
+      const parts = allocate(amount, e.map((x) => x.value));
+      shares = positive(e.map((x, i) => ({ memberId: x.memberId, amount: parts[i] })));
+      mode = "percent";
+      normSplit = { mode, percents: e.map((x) => ({ memberId: x.memberId, bp: x.value })) };
+    } else {
+      fail("split.mode must be one of equal, exact, shares, percent, itemized");
+    }
+  }
+  if (!shares.length) fail("at least one share must be positive");
+
+  // payers
+  let payers: Share[];
+  if (body.payers !== undefined) {
+    const e = memberEntries(body.payers, "payers", memberIds, (x) => cleanAmount(x.amount, "payer amount"));
+    payers = e.map((x) => ({ memberId: x.memberId, amount: x.value }));
+    const sum = payers.reduce((a, p) => a + p.amount, 0);
+    if (sum !== amount) fail(`payers sum (${sum}) must equal amount (${amount})`);
+  } else {
+    if (typeof body.paidBy !== "string" || !memberIds.has(body.paidBy)) fail("paidBy must be a member of the group");
+    payers = [{ memberId: body.paidBy, amount }];
   }
 
   if (kind === "payment") {
+    if (mode !== "equal") fail("a payment must use split mode 'equal' with one receiver");
+    if (payers.length !== 1) fail("a payment must have exactly one payer");
     if (shares.length !== 1) fail("a payment must have exactly one receiver");
-    if (shares[0].memberId === paidBy) fail("payer and receiver must differ");
+    if (shares[0].memberId === payers[0].memberId) fail("payer and receiver must differ");
   }
-  return { kind, description, amount, paidBy, date, splitMode, shares };
+  return { kind, description, amount, payers, date, category, splitMode: mode, split: normSplit, shares, fx };
+}
+
+// ---------- recurring ----------
+
+export interface RecurrenceInput {
+  frequency: "weekly" | "monthly";
+  startDate: string;
+  template: Record<string, unknown>;
+}
+
+/** Validates a recurring bill: the template is a bill body without `date`, checked against current members. */
+export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string): RecurrenceInput {
+  if (!isObj(body)) fail("body must be an object");
+  if (body.frequency !== "weekly" && body.frequency !== "monthly") fail("frequency must be 'weekly' or 'monthly'");
+  const startDate = cleanDate(body.startDate, "startDate");
+  if (!isObj(body.bill)) fail("bill is required");
+  const { date: _ignored, ...template } = body.bill;
+  const b = parseBill({ ...template, date: startDate }, memberIds, groupCurrency);
+  if (b.kind !== "expense") fail("only expenses can repeat");
+  return { frequency: body.frequency, startDate, template };
+}
+
+/** Next occurrence after `date`. Monthly keeps the anchor day, clamped to month length (31 → 28/30/31). */
+export function nextOccurrence(date: string, frequency: "weekly" | "monthly", anchorDay: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  if (frequency === "weekly") return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  const days = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, "0")}-${String(Math.min(anchorDay, days)).padStart(2, "0")}`;
 }

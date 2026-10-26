@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { BASE_URL, accessHeaders, api, makeGroup, today } from "../helpers/http";
+import { afterAll, describe, expect, it } from "vitest";
+import { BASE_URL, accessHeaders, api, cleanupGroups, makeGroup, today } from "../helpers/http";
+
+afterAll(cleanupGroups);
 
 const equal = (members: string[]) => ({ mode: "equal", members });
 const GID_RE = /^[A-Za-z0-9_-]{22}$/;

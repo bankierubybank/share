@@ -6,6 +6,8 @@ export type MdDialog = HTMLElement & { open: boolean; returnValue: string; show(
 export function openDialog(dialog: MdDialog): Promise<string> {
   document.body.appendChild(dialog);
   return new Promise((resolve) => {
+    // data-ready marks the end of the open animation (E2E waits for it before typing).
+    dialog.addEventListener("opened", () => (dialog.dataset.ready = "1"), { once: true });
     dialog.addEventListener("closed", () => {
       resolve(dialog.returnValue);
       dialog.remove();

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { api, apiError, type AppEnv } from "./routes";
+import { api, apiError, RECEIPT_MAX, scheduledMaintenance, type AppEnv } from "./routes";
 import { ValidationError } from "./lib/validate";
 import { verifyAccessJwt } from "./lib/access";
 
@@ -8,9 +8,9 @@ const MAX_BODY = 32 * 1024;
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
-  "img-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
+  "img-src 'self' data: blob:",
   "connect-src 'self'",
   "manifest-src 'self'",
   "object-src 'none'",
@@ -35,7 +35,8 @@ app.use("*", async (c, next) => {
   await next();
   // Asset responses may be immutable; rebuild so headers are mutable.
   c.res = new Response(c.res.body, c.res);
-  for (const [k, v] of Object.entries(SECURITY_HEADERS)) c.res.headers.set(k, v);
+  // Keep a stricter per-route CSP (receipt images are served with `sandbox`).
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) if (!c.res.headers.has(k)) c.res.headers.set(k, v);
   if (c.req.path.startsWith("/api/")) c.res.headers.set("Cache-Control", "no-store");
 });
 
@@ -52,7 +53,12 @@ app.use("*", async (c, next) => {
 
 app.use("/api/*", async (c, next) => {
   const m = c.req.method;
-  if (m === "POST" || m === "PUT" || m === "PATCH") {
+  if (m === "PUT" && /\/receipt$/.test(c.req.path)) {
+    // Receipt upload: raw image body, sniffed in the route. Larger cap than JSON.
+    if (!/^image\/(jpeg|png|webp)$/i.test(c.req.header("Content-Type") ?? ""))
+      return apiError(c, 415, "unsupported_media_type", "Content-Type must be image/jpeg, image/png or image/webp");
+    if (Number(c.req.header("Content-Length") ?? "0") > RECEIPT_MAX) return apiError(c, 413, "payload_too_large", "receipt must be at most 2 MB");
+  } else if (m === "POST" || m === "PUT" || m === "PATCH") {
     const ct = c.req.header("Content-Type") ?? "";
     if (!/^application\/json\b/i.test(ct)) return apiError(c, 415, "unsupported_media_type", "Content-Type must be application/json");
     const len = Number(c.req.header("Content-Length") ?? "0");
@@ -77,4 +83,9 @@ app.onError((err, c) => {
   return apiError(c, 500, "internal", "internal error");
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(scheduledMaintenance(env));
+  },
+} satisfies ExportedHandler<Env>;

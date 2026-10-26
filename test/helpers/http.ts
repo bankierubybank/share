@@ -14,6 +14,9 @@ export function accessHeaders(): Record<string, string> {
   return id && secret ? { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret } : {};
 }
 
+/** Ids of every group created through api()/makeGroup in this process; removed by cleanupGroups(). */
+export const createdGroups: string[] = [];
+
 export async function api(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
@@ -32,7 +35,39 @@ export async function api(method: string, path: string, body?: unknown, headers:
   } catch {
     /* non-JSON */
   }
+  if (method === "POST" && path === "/api/groups" && res.status === 201 && json?.group?.id) createdGroups.push(json.group.id);
   return { status: res.status, headers: res.headers, json, text };
+}
+
+/** Raw-bytes request (receipt upload/download). Returns the body as bytes. */
+export async function apiBytes(method: string, path: string, body?: Uint8Array, contentType?: string, headers: Record<string, string> = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method,
+    redirect: "manual",
+    headers: { ...accessHeaders(), ...(contentType ? { "Content-Type": contentType } : {}), ...headers },
+    body: body as BodyInit | undefined,
+  });
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let json: any = undefined;
+  try {
+    json = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    /* binary / non-JSON */
+  }
+  return { status: res.status, headers: res.headers, bytes, json, text: json ? new TextDecoder().decode(bytes) : "" };
+}
+
+/** Hard-deletes a group (and its receipts). */
+export async function deleteGroup(gid: string) {
+  return api("DELETE", `/api/groups/${gid}`);
+}
+
+/** Deletes every group created in this process (call from afterAll). Never throws. */
+export async function cleanupGroups() {
+  const ids = createdGroups.splice(0);
+  for (let i = 0; i < ids.length; i += 8) {
+    await Promise.all(ids.slice(i, i + 8).map((gid) => deleteGroup(gid).catch(() => undefined)));
+  }
 }
 
 export const today = () => new Date().toISOString().slice(0, 10);

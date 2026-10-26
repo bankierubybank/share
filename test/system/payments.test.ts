@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { api, makeGroup, today } from "../helpers/http";
+import { afterAll, describe, expect, it } from "vitest";
+import { api, cleanupGroups, makeGroup, today } from "../helpers/http";
+
+afterAll(cleanupGroups);
 
 describe("payments in summary", () => {
   it("count toward net only — paid/owed stay expense totals", async () => {

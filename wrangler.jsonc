@@ -20,6 +20,12 @@
       "migrations_dir": "./migrations"
     }
   ],
+  "r2_buckets": [
+    { "binding": "RECEIPTS", "bucket_name": "share-receipts" },
+    { "binding": "BACKUPS", "bucket_name": "share-backups" }
+  ],
+  // Daily: D1 backup to R2, materialize due recurring bills, purge bills deleted > 30 days ago.
+  "triggers": { "crons": ["17 0 * * *"] },
   "vars": {
     // Set both to enforce Cloudflare Access JWT verification inside the Worker (see docs/ACCESS.md).
     "ACCESS_TEAM_DOMAIN": "",

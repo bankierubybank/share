@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.2.0 — 2026-10-26 (deployed, version f3e6d320)
+
+Backlog items #1–15, 17, 20, 21, 23, 25 (see PROGRESS.md for the list).
+
+### Added
+- **Groups**: archive (read-only, server-enforced) / unarchive; delete group (type the name to confirm; removes receipts).
+- **Splits**: shares (weights with stepper), percent (must total 100%), itemized bill (per-item people, service charge
+  then VAT compounding), on top of equal / exact. Largest-remainder allocation, exact to the cent.
+- **Multiple payers** per bill; **foreign currency** bills (amount + rate → group currency; last rate remembered).
+- **Receipt photos** (R2, downscaled in browser to ≤1600 px JPEG, ≤2 MB, magic-byte checked, sandboxed when served).
+- **Search & filter** bills (text, category, "only <person>"); **view as** a person (their position, their share per bill).
+- **Categories** + "Spending by category" bar chart.
+- **CSV export** (BOM, CRLF, formula-injection safe) and **Print / save as PDF** (print-only report).
+- **Activity log** (who/what/when; actor from Cloudflare Access email) with **restore** of deleted bills;
+  **Undo** snackbar after deleting (deletes are soft, purged after 30 days).
+- **PromptPay QR** on Settle for THB groups (member PromptPay id; EMVCo payload with amount).
+- **Repeating bills** (weekly / monthly, anchor day kept, backfills past dates) + daily scheduled run.
+- **Quick add**: amount field first and focused; remembers last payer; "view as" person is the default payer.
+- **Theme toggle** (system / light / dark), applied before first paint.
+- **Accessibility**: skip link, landmarks/headings, labelled controls, focus rings, reduced-motion and forced-colors
+  support; automated axe scans in E2E.
+- **Self-hosted fonts & icons**: no Google Fonts; CSP now `'self'` only.
+- **Nightly D1 → R2 backup** (`share-backups/backups/YYYY-MM-DD.json.gz`, 30 days) + `scripts/restore-backup.mjs`.
+- API v2 (`docs/API.md`), migration `0002_features`, `scripts/verify-migration.sh`.
+- Test suites: unit 97, integration 104, system 29, security 79 (+1 prod-only), E2E 31 per browser.
+  Test helpers and the E2E fixture delete the groups they create (prod no longer accumulates test data).
+
+### Fixed (found while building / by tests)
+- Migration 0002 first draft **wiped `bill_shares`**: dropping `bills` cascades into children even with
+  `defer_foreign_keys`. Now backs up and restores shares; verified by `verify-migration.sh` (local dev data affected only).
+- Restore (Undo) POST had no body → 415 from the CSRF guard; client now sends `{}` (guard kept strict).
+- Receipt responses lost their sandbox CSP (global header loop overwrote it).
+- `activity?limit=2.7` → 500 (fraction in SQL LIMIT); now floored.
+- Actor from Access headers was not validated (could echo markup); now strict email shape.
+- Material buttons inside the bill form defaulted to `type=submit`: share steppers, "Several people paid",
+  "Add item" etc. submitted the form. All set to `type=button` (also home "Add person").
+- Payment dialog: the From select was moved into the hidden payers box → "paidBy must be a member".
+- PromptPay QR didn't appear: `md-select.value` is empty until first render; previews refresh on open.
+- Overflow menu stuck after first use (md-menu close animation computed `scale(Infinity)`); menu is `quick` now.
+- E2E fixture routed `blob:` URLs (same origin) and broke downloads; routes only http(s) now.
+- `md-outlined-select` 210 px min-width overflowed two-up rows on phones.
+
 ## 0.1.1 — 2026-10-26 (deployed, version 0461372b)
 
 Found by exploratory prod test ("Phuket trip", iPhone + laptop).
