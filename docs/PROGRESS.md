@@ -27,8 +27,6 @@ _Last updated: 2026-10-26_
   by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
   run `npm run test:prod` to confirm, then mark #9 closed.
 - Configure git remote (then push).
-- OK to delete ~290 leftover test groups in prod (keep "Phuket trip")? (ISSUES #3)
-
 ## v0.2 feature status (backlog picks)
 
 | # | Item | State |

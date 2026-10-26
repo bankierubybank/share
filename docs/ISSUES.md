@@ -4,7 +4,7 @@
 |---|--------|------|---------|
 | 1 | open | env | Playwright Firefox (Nightly 1555) fails to launch on this Mac (Darwin 27): `Could not find profile folder`. Same with sandbox disabled / custom TMPDIR. Excluded from `test:local` default matrix (`COMPAT_PROJECTS` env overrides). Retry after Playwright update. |
 | 2 | fixed 2026-10-23 | blocker | Deploy blocked: wrangler OAuth login only had account `daf82c7c…`. Fixed by owner: `CLOUDFLARE_API_TOKEN` for account `d20bca6d…` in `.env` (git-ignored). |
-| 3 | fixed 2026-10-26 | chore | Prod test runs accumulated groups. 0.2 adds `DELETE /api/groups/:gid`; API suites (`cleanupGroups`) and the E2E fixture delete what they create (verified: prod 290 → 290 across a run). ~290 older leftover groups remain in prod — cleanup pending owner OK. |
+| 3 | fixed 2026-10-26 | chore | Prod test runs accumulated groups. 0.2 adds `DELETE /api/groups/:gid`; API suites (`cleanupGroups`) and the E2E fixture delete what they create (verified: prod 290 → 290 across a run). Leftovers cleaned 2026-10-26 with owner OK: 288 test groups (317 bills) deleted via `DELETE /api/groups/:gid` (all 204); kept "Phuket trip" + "Khao Sok". Prod now 2 groups / 5 bills, no orphan rows. |
 | 4 | fixed | bug | Bill shares returned in DB order, not member order. Fixed in `src/db.ts` (ORDER BY members.position). |
 | 5 | fixed | test | Vitest forces `process.env.BASE_URL="/"`; tests now use `TARGET_URL`. |
 | 6 | note | policy | Org hooks on this machine block `rm -rf` and shell commands containing SQL-injection-like strings; use Write/Edit tools. |
