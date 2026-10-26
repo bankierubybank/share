@@ -21,6 +21,12 @@ _Last updated: 2026-10-26_
 | In-Worker Access JWT check (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) | ⏳ optional, not enabled |
 | Remote git | ⏳ owner to configure |
 
+## Pending on owner
+- **Rotate Access service token `share-tests`** (ISSUES #9). Old token was sent to Google Fonts hosts
+  by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
+  run `npm run test:prod` to confirm, then mark #9 closed.
+- Configure git remote (then push).
+
 ## Next ideas (backlog)
 - Delete group / archive; cleanup of test groups created by prod tests (ISSUES #3).
 - Percentage / shares-based splits; multiple payers per bill.

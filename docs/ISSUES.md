@@ -10,4 +10,4 @@
 | 6 | note | policy | Org hooks on this machine block `rm -rf` and shell commands containing SQL-injection-like strings; use Write/Edit tools. |
 | 7 | fixed 2026-10-26 | bug | Balances `paid`/`owed` counted settle-up payments (net was right). Fixed in `computeBalances`. |
 | 8 | fixed 2026-10-26 | ui | Phone balance rows clipped amounts ("THB 3,250.…"); laptop FAB overlapped People card. |
-| 9 | fixed 2026-10-26 / **action: rotate token** | security | E2E config leaked Access service token to Google Fonts hosts (prod runs 2026-10-23 + 26). Fixed via per-origin route fixture. Owner should rotate service token `share-tests` and update `.env.test`. |
+| 9 | leak fixed 2026-10-26 / **rotation pending (owner, deferred)** | security | E2E config leaked Access service token to Google Fonts hosts (prod runs 2026-10-23 + 26). Fixed via per-origin route fixture. Owner to rotate service token `share-tests`, update `.env.test`, re-run `npm run test:prod`. Risk low: HTTPS to Google only; still needs a 22-char group link to read data. |
