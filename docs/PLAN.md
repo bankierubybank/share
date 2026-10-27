@@ -1,47 +1,35 @@
-# Plan & Task Dispatch Assessment
+# Plan & Task Dispatch
 
-Goal: bill-splitting web app (Splitwise / KittySplit style) on Cloudflare Workers.
+Goal: bill-splitting web app (Splitwise / KittySplit style) on Cloudflare Workers. KittySplit model — no in-app
+accounts; Cloudflare Access gates the site; possession of a group link (`/g/<id>`) = edit access to that group.
 
-## Product scope (v0.1)
+## Model tiers (how work is split)
 
-KittySplit model — no user accounts inside the app. Cloudflare Access gates who can reach the site.
+| Tier | Use for | Examples in this repo |
+|------|---------|-----------------------|
+| **Opus** (main thread) | Architecture, contracts, money math, auth/security, migrations, UX, review of agent output | data model, `src/lib/money.ts`/`split.ts`, migrations, routes, all views |
+| **Sonnet** (subagent) | Well-specified work against a written contract (API.md, a failing test, a module interface) | API test suites, pure UI modules, i18n string extraction + translation |
+| **Haiku** | Mechanical, tiny-context edits | changelog / doc formatting (done inline so far) |
 
-- Create a **group** ("trip", "flat") → gets unguessable share link `/g/<id>`.
-- Add **members** (names) to group.
-- Add **bill**: description, amount, date, who paid, who shares it.
-  Split modes: `equal` among selected members, or `exact` amounts per member.
-- Edit / delete bill.
-- **Summary**: per-member balance + minimal "X pays Y amount" settlement list.
-- Record **settlement payment** (a bill of kind `payment` from debtor → creditor).
+Rules that worked:
+- Give Sonnet a **contract** (docs/API.md section, module signature) and a **fence** (which dirs it may edit).
+  Ask it to *write failing tests for source bugs instead of fixing them* — every round it found real bugs.
+- Never let two writers touch the same files at once; Sonnet works on tests / isolated modules while Opus builds UI.
+- Opus reviews every hand-back (e.g. rejected "allow bodyless POST" — kept the CSRF guard, changed the client).
 
-## Tasks & who does them
+## Dispatch history
 
-Model tiers: **Opus** (me, main thread) = design/architecture/judgment-heavy; **Sonnet** = well-specified
-routine code against a fixed contract; **Haiku** = mechanical, tiny-context work.
+| Round | Opus | Sonnet | Bugs Sonnet's tests found |
+|-------|------|--------|---------------------------|
+| v0.1 (2026-10-22) | scaffold, schema, API, money math, UI, E2E, scripts, deploy | integration + system + security suites | `BASE_URL` clobbered by Vitest; share order |
+| v0.2 (2026-10-26) | migration 0002, split/fx math, routes, cron, backup, UI for 20 items, E2E, a11y | PromptPay / CSV / image modules; v2 API suites | restore 415, receipt CSP overwritten, `limit=2.7` 500, actor not validated |
+| v0.3 (2026-10-26) | migration 0003, social routes, UI for 9 items, E2E | v3 API suites; Thai/English i18n (348 keys) | **merge leaked source group id via activity**; emoji comment length |
+| review (2026-10-27) | full code review + doc cross-check | — | (Opus) unbounded chunked bodies, runaway recurrences, scheduled steps coupled, stale group render over home, blob URL leak |
 
-| # | Task | Owner | Why |
-|---|------|-------|-----|
-| 1 | Architecture, data model, API contract (`docs/ARCHITECTURE.md`, `docs/API.md`) | Opus | Sets contract everything else depends on |
-| 2 | Scaffold: git, package.json, wrangler.jsonc, tsconfig, D1 migration | Opus | Small, but config errors cascade |
-| 3 | Money/split/settlement logic (`src/lib/*`) + unit tests | Opus | Correctness-critical (rounding, cents) |
-| 4 | Worker API (Hono routes, validation, security headers, Access JWT check) | Opus | Security-sensitive |
-| 5 | Frontend SPA with Material Web (M3), responsive mobile + laptop | Opus | UX judgment, ties to API |
-| 6 | Integration tests (vitest-pool-workers + D1) | Sonnet | Routine once API.md fixed |
-| 7 | System + security test suites (HTTP vs running server) | Sonnet | Routine against contract; I review |
-| 8 | E2E + compatibility tests (Playwright, 5 browser/device profiles) | Opus | Depends on exact DOM; flaky-prone |
-| 9 | Test runner scripts (`scripts/*.sh`), Access token template | Opus | Small |
-| 10 | Deploy (D1 create, migrate, wrangler deploy), prod test | Opus | Needs account auth, judgment on failures |
-| 11 | Docs upkeep (CHANGELOG, PROGRESS, ISSUES) after each cycle | Haiku-capable | Mechanical, but main thread does it inline when context already loaded |
+## Product scope
 
-Rule of thumb for future agents: dispatch to Sonnet when the task has a written contract
-(API.md, a failing test, a clear diff target). Keep on Opus anything touching money math, auth,
-or architecture. Haiku only for doc formatting / changelog entries.
+See `README.md` → Features and `docs/PROGRESS.md` for what's done and the backlog.
 
-## Default workflow (every change)
+## Default workflow
 
-See `CLAUDE.md` → "Workflow". Summary:
-1. Change code + tests.
-2. `npm run test:local` (typecheck, unit, integration, build, system/security/E2E vs `wrangler dev`).
-3. Pass → `npm run deploy` → `npm run test:prod` (system/security/E2E vs prod, with Access service token).
-4. Pass → update `docs/*.md` (CHANGELOG, PROGRESS, ISSUES, ARCHITECTURE if changed).
-5. `git commit`; `git push` once remote configured (none yet).
+See `CLAUDE.md` → "Workflow": test local → deploy → test prod → update docs → commit (→ push once a remote exists).

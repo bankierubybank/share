@@ -80,6 +80,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   let fxOn = !!src?.fx;
   let repeat: "none" | "weekly" | "monthly" = "none";
   let pendingReceipt: Blob | null = null;
+  let previewUrl: string | null = null;
   let removeReceipt = false;
 
   const defaultPayer =
@@ -420,7 +421,9 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   const receiptBox = h("div", { class: "stack-sm" }, fileInput, receiptPreview);
   function renderReceipt() {
     const existing = bill?.hasReceipt && !removeReceipt;
-    const src = pendingReceipt ? URL.createObjectURL(pendingReceipt) : existing ? receiptUrl(gid, bill!.id, bill!.updatedAt) : null;
+    if (previewUrl) URL.revokeObjectURL(previewUrl); // release the previous preview's blob
+    previewUrl = pendingReceipt ? URL.createObjectURL(pendingReceipt) : null;
+    const src = previewUrl ?? (existing ? receiptUrl(gid, bill!.id, bill!.updatedAt) : null);
     clear(receiptPreview,
       src && h("a", { href: src, target: "_blank", rel: "noopener", class: "receipt-thumb", "aria-label": t("bill.receiptOpen") }, h("img", { src, alt: t("bill.receiptAlt"), dataset: { testid: "receipt-img" } })),
       h("div", { class: "row" },
@@ -633,6 +636,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     update(); // md-select values exist only after first render (QR + previews need them)
     if (!bill && kind === "expense") amount.focus();
   }, { once: true });
-  if ((await openDialog(dialog)) === "duplicate" && bill) opts.onDuplicate?.(bill);
+  const closedWith = await openDialog(dialog);
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  if (closedWith === "duplicate" && bill) opts.onDuplicate?.(bill);
   return changed;
 }

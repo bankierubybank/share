@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { api, apiError, RECEIPT_MAX, scheduledMaintenance, type AppEnv } from "./routes";
 import { ValidationError } from "./lib/validate";
 import { verifyAccessJwt } from "./lib/access";
+import { readLimited } from "./lib/body";
 
 const MAX_BODY = 32 * 1024;
 
@@ -63,9 +64,8 @@ app.use("/api/*", async (c, next) => {
     if (!/^application\/json\b/i.test(ct)) return apiError(c, 415, "unsupported_media_type", "Content-Type must be application/json");
     const len = Number(c.req.header("Content-Length") ?? "0");
     if (len > MAX_BODY) return apiError(c, 413, "payload_too_large", "request body too large");
-    // Content-Length may be absent (chunked): enforce on actual bytes.
-    const buf = await c.req.raw.clone().arrayBuffer();
-    if (buf.byteLength > MAX_BODY) return apiError(c, 413, "payload_too_large", "request body too large");
+    // Content-Length may be absent (chunked): enforce on actual bytes, without buffering more than the cap.
+    if (!(await readLimited(c.req.raw.clone(), MAX_BODY))) return apiError(c, 413, "payload_too_large", "request body too large");
   }
   await next();
 });

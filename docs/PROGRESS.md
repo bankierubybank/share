@@ -1,8 +1,8 @@
 # Progress
 
-_Last updated: 2026-10-26_
+_Last updated: 2026-10-27_
 
-## Status: v0.3.0 live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
+## Status: v0.3.1 live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
 
 | Area | State |
 |------|-------|
@@ -12,10 +12,10 @@ _Last updated: 2026-10-26_
 | Security headers, CSRF content-type gate, body cap, optional Access JWT | ✅ |
 | Material 3 SPA: home, group (bills/summary/people), bill dialog, settle-up | ✅ |
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
-| Tests: unit 143, integration 152, system 31, security 106 (+1 prod-only), E2E 46×4 browsers (184) | ✅ local 2026-10-26 (v0.3.0) |
+| Tests: unit 148, integration 158, system 31, security 106 (+1 prod-only), E2E 46×4 browsers (184) | ✅ local 2026-10-27 (v0.3.1) |
 | Firefox compat | ⚠️ browser won't launch on this host (ISSUES #1) |
 | Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
-| Prod tests via Access service token: system 31, security 107, E2E 92 (Chromium + iPhone) | ✅ 2026-10-26 (v0.3.0, version 0fc167c6) |
+| Prod tests via Access service token: system 31, security 107, E2E 92 (one slow-save timeout passed on rerun) (Chromium + iPhone) | ✅ 2026-10-27 (v0.3.1, version 80b4a21f) |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
 | Demo trip "Phuket trip" on prod: /g/bT3gqiknUCsOAW1r_2za5A | ✅ |
 | Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |

@@ -312,10 +312,16 @@ export interface RecurrenceInput {
 }
 
 /** Validates a recurring bill: the template is a bill body without `date`, checked against current members. */
-export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string): RecurrenceInput {
+export const RECURRENCE_BACKFILL_DAYS = 92;
+
+/** `today` (YYYY-MM-DD, UTC) is injectable for tests. */
+export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string, today?: string): RecurrenceInput {
   if (!isObj(body)) fail("body must be an object");
   if (body.frequency !== "weekly" && body.frequency !== "monthly") fail("frequency must be 'weekly' or 'monthly'");
   const startDate = cleanDate(body.startDate, "startDate");
+  // Bounded backfill: a far-past start would create hundreds of bills on the next page load.
+  const days = (Date.parse(`${startDate}T00:00:00Z`) - Date.parse(`${today ?? new Date().toISOString().slice(0, 10)}T00:00:00Z`)) / 86_400_000;
+  if (days < -RECURRENCE_BACKFILL_DAYS || days > 366) fail(`startDate must be within the last ${RECURRENCE_BACKFILL_DAYS} days and the next year`);
   if (!isObj(body.bill)) fail("bill is required");
   const { date: _ignored, ...template } = body.bill;
   const b = parseBill({ ...template, date: startDate }, memberIds, groupCurrency);

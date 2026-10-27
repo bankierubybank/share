@@ -93,6 +93,10 @@ export function attachRowGestures(el: HTMLElement, g: RowGestures): () => void {
 
 /** Pull down from the top of the page to refresh (touch only). One instance per page. */
 let detachPull: (() => void) | null = null;
+export function detachPullToRefresh() {
+  detachPull?.();
+  detachPull = null;
+}
 export function attachPullToRefresh(indicator: HTMLElement, onRefresh: () => Promise<unknown>) {
   detachPull?.();
   let startY = 0;

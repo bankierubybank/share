@@ -3,7 +3,7 @@
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 
 Write requests (`POST/PUT/PATCH`) with a body **must** send `Content-Type: application/json`, else `415`.
-Body limit 32 KiB → `413`. Exception: receipt upload (`PUT …/receipt`) takes a raw `image/jpeg|png|webp` body ≤ 2 MiB.
+Body limit 32 KiB → `413` (also enforced for chunked bodies without Content-Length). Exception: receipt upload (`PUT …/receipt`) takes a raw `image/jpeg|png|webp` body ≤ 2 MiB.
 Errors: `{ "error": { "code": string, "message": string } }`.
 
 | Status | code |
@@ -77,7 +77,7 @@ Recurrence = { id; frequency: 'weekly'|'monthly'; nextDate; active; lastError: s
 | GET | `/api/groups/:gid/summary` | – | `{ balances, settlements, total, byCategory: Record<Category, number> }` |
 | GET | `/api/groups/:gid/activity?limit=50&before=<iso>` | – | `{ activity: Activity[] }` newest first, limit 1–100 |
 | GET | `/api/groups/:gid/recurring` | – | `{ recurring: Recurrence[] }` |
-| POST | `/api/groups/:gid/recurring` | `{ frequency, startDate, bill: BillBody-without-date }` | `201 { recurring, created }` (creates bills due up to today) |
+| POST | `/api/groups/:gid/recurring` | `{ frequency, startDate (today −92 … +366 days), bill: BillBody-without-date }` | `201 { recurring, created }` (creates bills due up to today) |
 | DELETE | `/api/groups/:gid/recurring/:rid` | – | `204` stop (bills already created stay) |
 
 ### v3 (app 0.3.0)
@@ -119,7 +119,8 @@ Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|
 
 ## Scheduled (daily 00:17 UTC)
 1. Backup all tables → R2 `share-backups/backups/YYYY-MM-DD.json.gz` (keep 30 days). Restore: `scripts/restore-backup.mjs`.
-2. Materialize due recurring bills (monthly keeps anchor day, clamped; weekly +7d). Invalid template → deactivated with `lastError`.
+2. Materialize due recurring bills (monthly keeps anchor day, clamped; weekly +7d; ≤60 per run each). Invalid template
+   or the group at 5000 bills → deactivated with `lastError`.
 3. Purge bills soft-deleted > 30 days (and their receipts).
 
 ### Settlement algorithm

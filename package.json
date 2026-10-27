@@ -1,6 +1,6 @@
 {
   "name": "share",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Bill-splitting web app (Splitwise/KittySplit style) on Cloudflare Workers + D1",
@@ -9,6 +9,7 @@
     "dev": "npm run build && wrangler dev --port 8787",
     "db:migrate:local": "wrangler d1 migrations apply share-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply share-db --remote",
+    "db:verify": "bash scripts/verify-migration.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.web.json",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",

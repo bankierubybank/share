@@ -13,6 +13,7 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
    ├── else    → env.ASSETS (dist/, Vite build of web/) with SPA fallback
    └── scheduled (daily 00:17 UTC) → backup D1 → R2 BACKUPS ("share-backups"),
                                     materialize recurring bills, purge 30-day-old soft deletes
+                                    (independent steps: one failing doesn't skip the others)
 ```
 
 ## Layout
@@ -27,12 +28,15 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 | `src/lib/actor.ts` | "Who did it" from Access headers (display only, sanitized) |
 | `src/lib/promptpay-id.ts` | PromptPay id normalization (shared with web) |
 | `src/routes-social.ts`, `src/db-social.ts`, `src/lib/social.ts` | Comments, subgroups, read-only view links, move/merge |
+| `src/lib/body.ts` | `readLimited()` — size-capped body reads (also for chunked uploads) |
 | `src/backup.ts` | Nightly D1 → R2 gzip JSON backup + 30-day retention |
 | `src/lib/validate.ts` | Input validation (pure) |
 | `src/lib/access.ts` | Cloudflare Access JWT verification (jose, JWKS) |
 | `src/lib/ids.ts` | Random ids (base64url, 128-bit for groups) |
 | `migrations/*.sql` | D1 schema migrations |
 | `web/` | Frontend source (Vite root). `main.ts` app, `api.ts` client, `money.ts` formatting, `icons.ts` (bundled SVG Material Symbols), `theme.ts`, `promptpay.ts` (QR), `export.ts` (CSV), `image.ts` (receipt downscale), `views/` |
+| `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts` |
+| `web/src/` (others) | `i18n.ts` (TH/EN), `gestures.ts` (swipe/long-press/pull), `sample.ts` (onboarding), `categories.ts`, `dialogs.ts`, `dom.ts` (`h()`), `router.ts`, `store.ts` (recent groups) |
 | `web/public/theme.js` | Tiny blocking script: applies saved light/dark before first paint |
 | `dist/` | Built assets (git-ignored) |
 | `test/unit` | Pure logic (vitest, node) |
@@ -55,6 +59,9 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 - `bill_comments(id, bill_id FK cascade, group_id FK, author_member_id FK set null, actor, body, created_at)`
 - `subgroups(id, group_id FK, name, member_ids JSON)`
 - `groups.view_id` (unique, nullable): read-only link id, separate from the edit id
+
+**Latency budget**: on prod every D1 round trip is ~100–200 ms (writes in batches can spike higher), so handlers
+should batch statements and avoid per-item query loops (see `createOccurrences`).
 
 Shares and payers are stored resolved (cents per member), so the summary is a simple aggregation; `split_json`
 keeps the user's input (weights / percents / items) for editing. Writes of a bill + its children + activity

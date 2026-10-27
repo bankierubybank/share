@@ -44,6 +44,9 @@ interface State {
 /** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
 export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" | "view" = "edit") {
   const isView = mode === "view";
+  // A load that finishes after the user navigated away must not paint over the new page.
+  const ownPath = location.pathname;
+  const stillHere = () => location.pathname === ownPath;
   let statsMod: Awaited<ReturnType<typeof loadStats>> | null = null;
   let tab: Tab = (session.get(`tab:${gid}`) as Tab) || "bills";
   if (!TABS.includes(tab) || (mode === "view" && tab === "activity")) tab = "bills";
@@ -96,7 +99,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   }
 
   async function refresh() {
-    if (await load()) render();
+    if ((await load()) && stillHere()) render();
   }
 
   const memberName = (id: string) => state.members.find((m) => m.id === id)?.name ?? t("member.removed");
@@ -803,7 +806,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           h("td", null, b.payers.map((p) => memberName(p.memberId)).join(" & ")), h("td", null, money(b.amount)))))));
   }
 
-  if (await load()) render();
+  if ((await load()) && stillHere()) render();
 }
 
 function initial(name: string) {

@@ -19,9 +19,14 @@
 | 15 | fixed 2026-10-26 | ui | Material buttons in `<form>` default to submit (steppers/"Several people paid" submitted the bill). |
 | 16 | fixed 2026-10-26 | ui | Payment dialog lost its From select; PromptPay QR hidden until md-select first render. |
 | 17 | fixed 2026-10-26 | ui | md-menu stuck after first use (close animation `scale(Infinity)`); menus/selects use `quick`. |
+| 18 | note | test | WebKit: md-dialog needs `autofocus` attr (script focus doesn't stick). E2E waits for `data-ready` on dialogs and for the re-render after saves. |
 | 19 | fixed 2026-10-26 | security | Merge put the source group's id (its edit secret) into the target's activity `entityId`. Now null. Regression test in `test/security/v3-security.test.ts`. |
 | 20 | fixed 2026-10-26 | bug | Comment length counted UTF-16 units; now code points. |
 | 21 | fixed 2026-10-26 | ui | Read-only view showed the laptop "Add bill" button; Duplicate stacked two dialogs. |
 | 22 | note | design | Move/merge authorization = possession of both group ids (KittySplit model); members matched by name. |
 | 23 | note | test | On prod, Cloudflare's edge answers some malformed URLs (e.g. `/api/view/%00`) with 400 before the Worker; tests accept 400 or 404 (never 2xx/5xx). |
-| 18 | note | test | WebKit: md-dialog needs `autofocus` attr (script focus doesn't stick). E2E waits for `data-ready` on dialogs and for the re-render after saves. |
+| 24 | fixed 2026-10-27 | security | Chunked request bodies (no Content-Length) were fully buffered before the 32 KiB / 2 MiB checks → memory exhaustion. Now `readLimited()` stops at the cap. |
+| 25 | fixed 2026-10-27 | bug | Repeating bills: no start-date bound (1990 weekly = 60 bills per page load) and auto-created bills ignored the 5000 cap. Now start ∈ [today−92d, today+366d]; materialize stops the recurrence at the cap. |
+| 26 | fixed 2026-10-27 | robustness | Scheduled job: a failing backup skipped recurring + purge. Steps now run independently; failures logged and rethrown at the end. |
+| 27 | fixed 2026-10-27 | ui | Pull-to-refresh stayed attached after leaving a group (pulling on home re-rendered the old group over it); slow loads could also paint after navigation. Detached on home + `stillHere()` guard. Receipt preview blob URLs now revoked. |
+| 28 | mitigated 2026-10-27 | perf | Prod D1 (APAC primary, no read replicas): reads ~150 ms, but multi-statement write batches measured 0.7–7 s (spiky) on 2026-10-27; a middleware-only POST is ~70 ms, so it's the DB write path, not app code. Made prod E2E flaky (10 s waits). Mitigations: recurring catch-up now 1 claim + 1 batch (was ~8 round trips per occurrence; 4.7 s → see CHANGELOG), prod E2E timeouts 30 s / 120 s, prod vitest (system/security) 120 s per test + 300 s hooks, prod E2E 2 workers (more parallel saves queued past 30 s). Watch: if it persists, consider D1 read replication / Sessions API, fewer statements per write, or Durable Object per group. Idle probe 2026-10-27: create group 0.7–1.4 s, add bill 0.8–2 s, read 150 ms. Side effect: the 10 s cleanup hook timed out once → 47 test groups (26 bills) left on prod, deletion pending owner OK. |

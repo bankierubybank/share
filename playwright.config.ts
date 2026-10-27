@@ -7,11 +7,16 @@ const BASE_URL = process.env.TARGET_URL ?? "http://localhost:8787";
 // Access service token is attached per-origin in test/e2e/fixtures.ts — NOT via extraHTTPHeaders,
 // which would leak it to third-party hosts (Google Fonts).
 
+// Prod writes go to a single D1 primary and can take seconds (ISSUES #28); give remote runs more headroom.
+const remote = !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(BASE_URL);
+
 export default defineConfig({
   testDir: "test/e2e",
-  timeout: 45_000,
-  expect: { timeout: 10_000 },
+  timeout: remote ? 120_000 : 45_000,
+  expect: { timeout: remote ? 30_000 : 10_000 },
   retries: process.env.CI ? 1 : 0,
+  // Prod writes queue on one D1 primary: parallel browsers pile up saves past 30 s (ISSUES #28).
+  workers: remote ? 2 : undefined,
   reporter: [["list"]],
   use: { baseURL: BASE_URL, trace: "retain-on-failure" },
   // Compatibility matrix: desktop engines + phone emulation. `npm run test:e2e` runs chromium only.

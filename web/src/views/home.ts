@@ -4,12 +4,14 @@ import { CURRENCIES, defaultCurrency } from "../money";
 import { forgetGroup, recentGroups } from "../store";
 import { navigate } from "../router";
 import { themeButton } from "../theme";
+import { detachPullToRefresh } from "../gestures";
 import { dispatch } from "../router";
 import { lang, setLang, t } from "../i18n";
 
 type TextField = HTMLElement & { value: string; error: boolean; errorText: string; reportValidity(): boolean };
 
 export function renderHome(root: HTMLElement) {
+  detachPullToRefresh(); // the group view's pull-to-refresh must not fire here
   document.title = t("home.title");
   const members: string[] = [];
 

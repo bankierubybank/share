@@ -1091,14 +1091,18 @@ describe("recurring bills", () => {
 
   it("monthly keeps the anchor day, clamped to month length (31st)", async () => {
     const { gid, ids } = await makeGroup();
-    const r = await call("POST", `/api/groups/${gid}/recurring`, { frequency: "monthly", startDate: "2025-01-31", bill: rentBody(ids) });
+    // The API only accepts starts within the last 92 days (ISSUES #25), so start in the future and then move the
+    // series back to Jan 31 in the DB to exercise month-end clamping over several months.
+    const r = await call("POST", `/api/groups/${gid}/recurring`, { frequency: "monthly", startDate: daysAgo(-30), bill: rentBody(ids) });
     expect(r.status, r.text).toBe(201);
+    expect(r.json.created).toBe(0);
+    await env.DB.prepare("UPDATE recurrences SET next_date = '2025-01-31', anchor_day = 31 WHERE id = ?").bind(r.json.recurring.id).run();
     const dates = ((await call("GET", `/api/groups/${gid}`)).json.bills as any[]).map((b) => b.date).sort();
     expect(dates.slice(0, 6)).toEqual(["2025-01-31", "2025-02-28", "2025-03-31", "2025-04-30", "2025-05-31", "2025-06-30"]);
-    expect(dates.length).toBe(r.json.created);
     expect(new Set(dates).size).toBe(dates.length);
     for (const d of dates) expect(d <= daysAgo(0)).toBe(true);
-    expect(r.json.recurring.nextDate > daysAgo(0)).toBe(true);
+    const rec = (await call("GET", `/api/groups/${gid}/recurring`)).json.recurring[0];
+    expect(rec.nextDate > daysAgo(0)).toBe(true);
   });
 
   it("DELETE stops the series; existing bills stay; no new bills; 404 on repeat", async () => {

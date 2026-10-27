@@ -8,6 +8,7 @@ import {
 } from "./lib/validate";
 import { actorOf } from "./lib/actor";
 import { runBackup } from "./backup";
+import { readLimited } from "./lib/body";
 import { registerSocial } from "./routes-social";
 import { stripMemberFromSubgroups } from "./db-social";
 
@@ -15,7 +16,7 @@ export type AppEnv = { Bindings: Env };
 type GroupEnv = AppEnv & { Variables: { group: db.Group } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.3.1";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -41,32 +42,57 @@ export async function materializeDue(env: Env, gid?: string): Promise<number> {
     const group = await db.getGroup(env.DB, r.group_id);
     if (!group) continue;
     const memberIds = new Set((await db.listMembers(env.DB, r.group_id)).map((m) => m.id));
-    let date = r.next_date;
-    for (let n = 0; n < 60 && date <= today(); n++) {
-      const next = nextOccurrence(date, r.frequency, r.anchor_day);
-      let input;
-      try {
-        input = parseBill({ ...JSON.parse(r.template), date }, memberIds, group.currency);
-      } catch (e) {
-        if (!(e instanceof ValidationError)) throw e;
-        await db.failRecurrence(env.DB, r.id, e.message);
-        break;
-      }
-      if (!(await db.claimOccurrence(env.DB, r.id, date, next))) break; // another request got it
-      await db.createBill(env.DB, r.group_id, input, "recurring", r.id);
-      created++;
-      date = next;
+    // Work out every due date first (≤60 per run), then claim + insert them in one go: on prod each D1 round
+    // trip costs 100 ms+, so per-occurrence queries made catching up a series take seconds.
+    const dates: string[] = [];
+    let next = r.next_date;
+    while (dates.length < 60 && next <= today()) {
+      dates.push(next);
+      next = nextOccurrence(next, r.frequency, r.anchor_day);
     }
+    if (!dates.length) continue;
+    const template = JSON.parse(r.template);
+    let inputs;
+    try {
+      inputs = dates.map((date) => parseBill({ ...template, date }, memberIds, group.currency));
+    } catch (e) {
+      if (!(e instanceof ValidationError)) throw e;
+      await db.failRecurrence(env.DB, r.id, e.message);
+      continue;
+    }
+    const room = LIMITS.billsPerGroup - (await db.countRows(env.DB, "bills", r.group_id));
+    if (room < inputs.length) {
+      // Create what fits, then stop the series.
+      if (room > 0 && (await db.createOccurrences(env.DB, r.group_id, r.id, dates[0], dates[room], inputs.slice(0, room)))) created += room;
+      await db.failRecurrence(env.DB, r.id, `group reached ${LIMITS.billsPerGroup} bills`);
+      continue;
+    }
+    if (await db.createOccurrences(env.DB, r.group_id, r.id, dates[0], next, inputs)) created += inputs.length;
   }
   return created;
 }
 
 export async function scheduledMaintenance(env: Env) {
-  // Backup first so the snapshot still holds bills about to be purged.
-  await runBackup(env);
-  await materializeDue(env);
-  const keys = await db.purgeDeleted(env.DB, PURGE_DAYS);
-  if (keys.length) await env.RECEIPTS.delete(keys);
+  // Steps are independent: a failed backup must not stop repeating bills or the purge (and vice versa).
+  // Backup runs first so the snapshot still holds bills about to be purged.
+  const steps: [string, () => Promise<unknown>][] = [
+    ["backup", () => runBackup(env)],
+    ["recurring", () => materializeDue(env)],
+    ["purge", async () => {
+      const keys = await db.purgeDeleted(env.DB, PURGE_DAYS);
+      if (keys.length) await env.RECEIPTS.delete(keys);
+    }],
+  ];
+  const failed: string[] = [];
+  for (const [name, run] of steps) {
+    try {
+      await run();
+    } catch (e) {
+      failed.push(name);
+      console.error(`scheduled ${name} failed`, e);
+    }
+  }
+  if (failed.length) throw new Error(`scheduled maintenance failed: ${failed.join(", ")}`); // visible in Workers logs
 }
 
 export const api = new Hono<AppEnv>();
@@ -215,8 +241,8 @@ g.put("/bills/:bid/receipt", async (c) => {
   const bid = c.req.param("bid");
   const gid = gidOf(c);
   if (!ENTITY_ID_RE.test(bid) || !(await db.getBill(c.env.DB, gid, bid))) return apiError(c, 404, "not_found", "bill not found");
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (bytes.byteLength > RECEIPT_MAX) return apiError(c, 413, "payload_too_large", "receipt must be at most 2 MB");
+  const bytes = await readLimited(c.req.raw, RECEIPT_MAX); // bounded even without Content-Length
+  if (!bytes) return apiError(c, 413, "payload_too_large", "receipt must be at most 2 MB");
   const type = sniffImage(bytes);
   if (!type) return apiError(c, 415, "unsupported_media_type", "receipt must be a JPEG, PNG or WebP image");
   const key = `${gid}/${bid}/${randomId(9)}`;

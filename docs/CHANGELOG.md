@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — 2026-10-27 (code review; deployed, version 80b4a21f)
+
+Full review of the code base + cross-check of every .md against the code (routes, tables, scripts, conventions).
+
+### Fixed
+- Request bodies without Content-Length were buffered in full before size checks (JSON 32 KiB, receipts 2 MiB);
+  now read with a hard cap (`src/lib/body.ts`).
+- Repeating bills: start date limited to the last 92 days / next year; recurrences stop at the 5000-bill cap.
+- Scheduled maintenance steps (backup, recurring, purge) no longer block each other.
+- Group view: pull-to-refresh / late loads could re-render a group over the home page; receipt preview blob leak.
+
+### Performance
+- Repeating-bill catch-up: all due dates computed up front, one guarded claim + one batched insert (was ~8 D1 round
+  trips per occurrence → 4.7 s for 3 months on prod). Concurrency test: two simultaneous runs create each bill once.
+- Prod E2E gets 30 s expect / 120 s test timeouts, prod system/security (vitest) 120 s per test (prod D1 write
+  batches spiked to seconds — ISSUES #28; the v3 system story timed out at 30 s on the first prod run).
+
+### Docs
+- README rewritten for v0.3 (features, all test commands, `db:verify`); PLAN.md now records model tiers and
+  the per-round dispatch history; CLAUDE.md conventions (i18n, lazy chunks, bounded bodies, id secrecy, E2E waits);
+  ARCHITECTURE layout of web modules; API limits; ISSUES sorted.
+- New script `npm run db:verify`.
+
 ## 0.3.0 — 2026-10-26 (deployed, version 0fc167c6)
 
 Backlog picks #4, 6, 8, 10, 11, 12, 14, 16, 17, 18 (second round).

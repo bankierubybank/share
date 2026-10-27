@@ -292,11 +292,8 @@ const childInserts = (db: D1Database, bid: string, input: BillInput) => [
 
 const billDetail = (input: BillInput) => ({ description: input.description, amount: input.amount, kind: input.kind });
 
-export async function createBill(
-  db: D1Database, gid: string, input: BillInput, actor: string | null, recurrenceId: string | null = null,
-): Promise<Bill> {
-  const bid = entityId();
-  await db.batch([
+function billInsertStatements(db: D1Database, gid: string, bid: string, input: BillInput, actor: string | null, recurrenceId: string | null) {
+  return [
     db
       .prepare(
         `INSERT INTO bills (id, group_id, kind, description, amount, paid_by, date, split_mode, split_json, category,
@@ -309,8 +306,30 @@ export async function createBill(
       ),
     ...childInserts(db, bid, input),
     logActivity(db, gid, actor, recurrenceId ? "bill.recurring" : "bill.create", bid, billDetail(input)),
-  ]);
+  ];
+}
+
+export async function createBill(
+  db: D1Database, gid: string, input: BillInput, actor: string | null, recurrenceId: string | null = null,
+): Promise<Bill> {
+  const bid = entityId();
+  await db.batch(billInsertStatements(db, gid, bid, input, actor, recurrenceId));
   return (await getBill(db, gid, bid))!;
+}
+
+/**
+ * Creates several occurrences of a recurring bill. First claims them by advancing next_date with a guard on the
+ * expected value (only one concurrent caller wins), then inserts all bills in as few batches as possible.
+ * If the insert fails after the claim, those occurrences are skipped (not duplicated) — same as before.
+ */
+export async function createOccurrences(
+  db: D1Database, gid: string, rid: string, fromDate: string, toDate: string, inputs: BillInput[],
+): Promise<boolean> {
+  const claim = await db.prepare("UPDATE recurrences SET next_date = ? WHERE id = ? AND next_date = ? AND active = 1").bind(toDate, rid, fromDate).run();
+  if (!claim.meta.changes) return false; // another request already created these
+  const stmts = inputs.flatMap((input) => billInsertStatements(db, gid, entityId(), input, "recurring", rid));
+  for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+  return true;
 }
 
 export async function updateBill(db: D1Database, gid: string, bid: string, input: BillInput, actor: string | null): Promise<Bill | null> {
@@ -455,12 +474,6 @@ export async function dueRecurrences(db: D1Database, today: string, gid?: string
     .bind(...(gid ? [today, gid] : [today]))
     .all<RecRow>();
   return results;
-}
-
-/** Optimistic claim of one occurrence: only one concurrent caller advances next_date. */
-export async function claimOccurrence(db: D1Database, rid: string, from: string, to: string): Promise<boolean> {
-  const r = await db.prepare("UPDATE recurrences SET next_date = ? WHERE id = ? AND next_date = ? AND active = 1").bind(to, rid, from).run();
-  return r.meta.changes > 0;
 }
 
 export async function failRecurrence(db: D1Database, rid: string, error: string) {
