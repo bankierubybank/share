@@ -24,9 +24,9 @@ _Last updated: 2026-10-27_
 | Remote git | ⏳ owner to configure |
 
 ## Pending on owner
-- **Open "Phuket trip" and "Khao Sok" and pick who you are** (v0.4: pre-0.4 trips are unclaimed; first visitor
-  claims, then only linked people can open them). Then add the others' Access emails under People.
-- Decide on 47 leftover prod test groups from the 2026-10-27 timed-out cleanup (ISSUES #28) — delete on OK.
+- **Open "Phuket trip" and pick who you are** (v0.4: pre-0.4 trips are unclaimed; first visitor claims, then only
+  linked people can open it). "Khao Sok" was claimed 2026-10-27 as "Bank". Then add the others' emails under People.
+- Stop the orphaned `wrangler dev` on :8787 (ISSUES #31).
 - **Rotate Access service token `share-tests`** (ISSUES #9). Old token was sent to Google Fonts hosts
   by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
   run `npm run test:prod` to confirm, then mark #9 closed.
