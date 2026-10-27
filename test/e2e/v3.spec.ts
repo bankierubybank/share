@@ -97,7 +97,8 @@ test("move a bill to another group, adding a missing person (#10)", async ({ pag
   await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("bills-empty")).toBeVisible();
   await page.getByTestId("nav-home").click();
-  await page.getByTestId("recent-groups").getByText(target).click();
+  // Click the server's "my trips" row: the local-only list is swapped for it when it arrives, which can eat a tap.
+  await page.getByTestId("trip-mine").filter({ hasText: target }).click();
   await expect(page.getByTestId("bill-item").filter({ hasText: "Misfiled taxi" })).toHaveCount(1);
   await showPanel(page, "members");
   await expect(page.getByTestId("members-list")).toContainText("Ben");

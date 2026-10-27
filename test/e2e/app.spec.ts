@@ -48,7 +48,14 @@ async function addEqualBill(page: Page, desc: string, amount: string, paidBy: st
   for (const p of exclude) await page.getByTestId(`split-check-${p}`).click();
   await page.getByTestId("bill-save").click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByTestId("bill-item").filter({ hasText: desc }).first()).toBeAttached(); // re-render done
+  await expect(page.getByTestId("bill-item").filter({ hasText: desc }).first()).toBeAttached();
+  await expect(page.locator("[data-saving]")).toHaveCount(0); // optimistic save confirmed + re-render done
+}
+
+async function saveBill(page: Page) {
+  await page.getByTestId("bill-save").click();
+  await expect(page.getByTestId("bill-dialog")).toHaveCount(0);
+  await expect(page.locator("[data-saving]")).toHaveCount(0);
 }
 
 test("create group, add bill, see who owes whom", async ({ page }) => {
@@ -107,7 +114,7 @@ test("edit and delete a bill", async ({ page }) => {
   await page.getByTestId("bill-item").first().click();
   await fill(page, "bill-description", "Coffee & cake");
   await fill(page, "bill-amount", "20");
-  await page.getByTestId("bill-save").click();
+  await saveBill(page);
   await expect(page.getByTestId("bill-item").first()).toContainText("Coffee & cake");
   await expect(page.getByTestId("total-spent")).toContainText("20");
 

@@ -91,6 +91,12 @@ export const api = {
   createGroup: (name: string, currency: string, members: string[], me = 0) =>
     req<{ group: Group; members: Member[]; me: string }>("POST", "/groups", { name, currency, members, me }),
   getGroup: (gid: string) => req<{ group: Group; members: Member[]; bills: Bill[]; me: string | null }>("GET", g(gid)),
+  /** The whole trip page in one request (getGroup + summary + recurring + activity + subgroups). */
+  groupPage: (gid: string) =>
+    req<{
+      group: Group; members: Member[]; bills: Bill[]; me: string | null; summary: Summary; recurring: Recurrence[];
+      activity: Activity[]; subgroups: Subgroup[];
+    }>("GET", `${g(gid)}/full`),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
   updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean }) =>

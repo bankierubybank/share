@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.0 — 2026-10-27
+
+Owner picks from round 3: #15 D1 write latency, #13 faster saves, #18 CI draft (+ repo name).
+
+### Performance (#15)
+- **Fewer D1 round trips.** A write now reads its result back in the same `batch()` (add/edit bill, restore,
+  create trip, rename/archive, comment); validation reads are one batch (`billWriteContext`); delete/restore build
+  their activity row in SQL (`INSERT … SELECT json_object(…) … AND changes() > 0`) instead of reading the bill
+  first. Add / edit bill: 6–7 → 3 round trips; delete 4 → 2; restore 5 → 2; create trip 2 → 1.
+- **One request for the trip page**: `GET /api/groups/:gid/full` (one 8-statement batch) replaces five parallel
+  requests (each with its own Access check + 2–4 round trips).
+- **Smart Placement** for the API, and only `/api/*` runs the Worker (`run_worker_first: ["/api/*"]`): pages and
+  bundles come straight from the edge, with their security headers from `web/public/_headers` and
+  `Cache-Control: immutable` on hashed `/assets/*`.
+- **Server-Timing** on every API response (`db;dur;desc="N round trips", app;dur`) + a `slow request` log line
+  (> 800 ms, route shape only). Budgets are pinned in `test/integration/perf.test.ts`.
+
+### Faster saves (#13)
+- **Optimistic bill add / edit / delete**: the dialog closes at once, the row shows "Saving…" and totals /
+  balances / who-pays-whom update immediately (computed by `src/lib/summary.ts`, the Worker's own code). The
+  server's answer replaces it; a failure rolls back and offers **Edit** to reopen what was typed. Opening a row
+  that is still saving waits for it; Undo after a delete waits for the delete to land. Receipt upload follows
+  the save; if only the photo fails, the bill stays and a message says so.
+- Repeating bills, moves, people, settings and comments still wait for the server (they need its answer).
+
+### Measured on prod (median of 6, before → after)
+add bill 301 → 175 ms · edit 300 → 172 ms · delete 171 → 115 ms · create trip 1815 → 1066 ms · trip page
+5 requests / 177 ms → 1 request / 188 ms. Perceived save time for bills: 0 ms (optimistic).
+
+### Fixed (found while testing 0.5)
+- Overlapping background refreshes could paint an older page over a newer one (ISSUES #32): newest load wins.
+- E2E helpers wait for `[data-saving]` to clear (the save is confirmed and the page re-rendered) before the next step.
+
+### CI (#18, draft)
+- `.github/workflows/ci.yml` (local gate on every push/PR) and `deploy.yml` (prod D1 export → R2, deploy, prod
+  tests, automatic `wrangler rollback` on failure). Inactive until a GitHub remote + secrets exist — `docs/CI.md`
+  has the setup steps and repo-name ideas.
+
 ## 0.4.0 — 2026-10-27 (deployed, version f8bfa8f1)
 
 Owner request: "limit view on trip you involved" — ABC on trip 1, CDE on trip 2 → A, B see trip 1; C sees both.

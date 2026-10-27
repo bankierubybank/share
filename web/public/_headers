@@ -1,0 +1,14 @@
+# Static assets are served from the edge without running the Worker (wrangler.jsonc → run_worker_first: /api/*),
+# so their hardening headers live here. Keep in sync with SECURITY_HEADERS in src/index.ts.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+
+# Vite's hashed bundles never change.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

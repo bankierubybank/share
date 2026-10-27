@@ -19,6 +19,10 @@ import { forgetGroup, rememberGroup } from "../store";
 import { dispatch, navigate } from "../router";
 import { lang, locale, setLang, t, tn } from "../i18n";
 import { attachPullToRefresh, attachRowGestures } from "../gestures";
+import { summarize } from "../../../src/lib/summary";
+import type { PendingSave } from "./bill-dialog";
+
+const cmpDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 
 // Lazy chunks (#18): dialogs, export and stats load on first use.
 const loadBillDialog = () => import("./bill-dialog");
@@ -60,7 +64,10 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
 
   clear(root, appBar(t("common.loading")), h("main", { class: "page center", "aria-busy": "true" }, h("md-circular-progress", { indeterminate: true, "aria-label": t("common.loading") })));
 
+  // Saves refresh in the background, so loads can overlap: only the newest one may paint.
+  let loadSeq = 0;
   async function load(): Promise<boolean> {
+    const seq = ++loadSeq;
     try {
       if (isView) {
         const [v, sm] = await Promise.all([api.view(gid), loadStats()]);
@@ -72,17 +79,18 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           summary: v.summary, recurring: [], activity: [], subgroups: [], me: null,
         };
       } else {
-        const [g, summary, rec, act, subs, sm] = await Promise.all([
-          api.getGroup(gid), api.summary(gid), api.recurring(gid), api.activity(gid), api.subgroups(gid), loadStats(),
-        ]);
+        const [p, sm] = await Promise.all([api.groupPage(gid), loadStats()]);
+        if (seq !== loadSeq) return false; // a newer load is on its way
         statsMod = sm;
-        state = { ...g, summary, recurring: rec.recurring, activity: act.activity, subgroups: subs.subgroups };
-        rememberGroup(g.group);
+        state = p;
+        server = { bills: p.bills, summary: p.summary };
+        rememberGroup(p.group);
+        overlayPending();
       }
       if (viewAs && !state.members.some((m) => m.id === viewAs)) viewAs = null;
       return true;
     } catch (err) {
-      if (!stillHere()) return false;
+      if (!stillHere() || seq !== loadSeq) return false;
       if (!isView && err instanceof ApiError && err.code === "claim_required" && err.members) {
         claimView(err.members);
       } else if (!isView && err instanceof ApiError && err.code === "not_member") {
@@ -276,9 +284,60 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     }
   }
 
+  // ---------- optimistic saves (#13) ----------
+  // A saved/deleted bill shows at once (marked "Saving…") with totals recomputed locally by the same code the
+  // Worker uses; the server's answer then replaces it (refresh) or, on failure, it is rolled back with an Edit
+  // action that reopens what was entered.
+  const pending = new Map<string, PendingSave>();
+  /** Last server answer; `state.bills`/`state.summary` = this + pending changes. */
+  let server: { bills: Bill[]; summary: Summary } = { bills: [], summary: { balances: [], settlements: [], total: 0, byCategory: {} } };
+
+  function overlayPending() {
+    if (!pending.size) {
+      state.bills = server.bills;
+      state.summary = server.summary;
+      return;
+    }
+    let bills = server.bills;
+    for (const op of pending.values()) {
+      bills = bills.filter((b) => b.id !== op.id);
+      if (op.bill) bills.push(op.bill);
+    }
+    // Same order as the server: newest date first, then newest created.
+    bills.sort((a, b) => cmpDesc(a.date, b.date) || cmpDesc(a.createdAt, b.createdAt));
+    state.bills = bills;
+    state.summary = summarize(state.members.map((m) => m.id), bills) as Summary;
+  }
+
+  function track(op: PendingSave) {
+    pending.set(op.id, op);
+    overlayPending();
+    if (stillHere()) render();
+    op.done.then(
+      () => {
+        pending.delete(op.id);
+        void refresh();
+      },
+      (e) => {
+        pending.delete(op.id);
+        overlayPending();
+        if (!stillHere()) return;
+        render();
+        const msg = e instanceof Error ? e.message : t("common.saveFailed");
+        snackbar(t("bill.saveFailedToast", { msg }), op.bill ? { label: t("bill.editAgain"), run: () => void reopen(op) } : undefined);
+      },
+    );
+  }
+
+  async function reopen(op: PendingSave) {
+    if (!op.bill || readOnly()) return;
+    const again = op.id.startsWith("tmp-") ? { draft: op.bill } : { bill: op.bill };
+    if (await openBillDialog({ ...billOpts(), ...again })) refresh();
+  }
+
   const billOpts = () => ({
     group: state.group, members: state.members, bills: state.bills, viewAs, subgroups: state.subgroups,
-    onDeleted: undoable, onDuplicate: (b: Bill) => void duplicateBill(b),
+    onDeleted: undoable, onDuplicate: (b: Bill) => void duplicateBill(b), onSaving: track,
   });
   const openBillDialog = async (o: Parameters<Awaited<ReturnType<typeof loadBillDialog>>["openBillDialog"]>[0]) =>
     (await loadBillDialog()).openBillDialog(o);
@@ -288,14 +347,11 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     if (await openBillDialog({ ...billOpts(), template: b })) refresh();
   }
 
-  async function swipeDelete(b: Bill) {
-    try {
-      await api.deleteBill(gid, b.id);
-      undoable(b);
-      refresh();
-    } catch (e) {
-      snackbar(e instanceof Error ? e.message : t("common.deleteFailed"));
-    }
+  function swipeDelete(b: Bill) {
+    if (pending.has(b.id)) return;
+    const done = api.deleteBill(gid, b.id).then(() => null);
+    track({ id: b.id, bill: null, done });
+    undoable(b, done);
   }
 
   async function addBill(payment?: { from: string; to: string; amount: number }) {
@@ -307,14 +363,24 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   async function editBill(bill: Bill) {
     if (isView) return;
     if (readOnly()) return snackbar(t("group.archivedEdit"));
+    const op = pending.get(bill.id);
+    if (op) {
+      // Still saving: open it once the server has it (a failed save shows its own message).
+      snackbar(t("bill.stillSaving"));
+      const saved = await op.done.catch(() => null);
+      if (!saved || !stillHere()) return;
+      bill = saved;
+    }
     if (await openBillDialog({ ...billOpts(), bill })) refresh();
   }
 
-  function undoable(bill: Bill) {
+  /** `deleting`: the delete still on its way (optimistic); Undo waits for it. */
+  function undoable(bill: Bill, deleting?: Promise<unknown>) {
     snackbar(t("bill.deletedToast", { desc: bill.description }), {
       label: t("common.undo"),
       run: async () => {
         try {
+          if (deleting && !(await deleting.then(() => true, () => false))) return; // never deleted: nothing to undo
           await api.restoreBill(gid, bill.id);
           snackbar(t("bill.restored"));
           refresh();
@@ -474,10 +540,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           b.commentCount > 0 && tn("bills.comments", b.commentCount),
         ].filter(Boolean).join(" · ");
         const cat = isPayment ? { icon: "payments" as const, label: t("bill.payment") } : { icon: CATEGORY_META[b.category].icon, label: categoryLabel(b.category) };
-        items.push(h("md-list-item", { type: isView ? "text" : "button", onclick: () => editBill(b), dataset: { testid: "bill-item", billId: b.id }, "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}` },
+        const saving = pending.has(b.id);
+        items.push(h("md-list-item", {
+          type: isView ? "text" : "button", class: saving ? "saving" : "", onclick: () => editBill(b),
+          dataset: { testid: "bill-item", billId: b.id, ...(saving ? { saving: "1" } : {}) },
+          "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}${saving ? `, ${t("bill.saving")}` : ""}`,
+        },
           h("div", { slot: "start", class: `avatar ${isPayment ? "payment" : ""}`, title: cat.label }, icon(cat.icon)),
           h("div", { slot: "headline" }, b.description),
-          h("div", { slot: "supporting-text" }, supporting, extras && h("span", { class: "extras" }, ` · ${extras}`)),
+          h("div", { slot: "supporting-text" }, saving && h("span", { class: "saving-tag", dataset: { testid: "bill-saving" } }, `${t("bill.saving")} · `),
+            supporting, extras && h("span", { class: "extras" }, ` · ${extras}`)),
           h("div", { slot: "end", class: "bill-end" },
             h("div", { class: "md-typescale-title-small tabular" }, money(b.amount)),
             mine !== null && !isPayment && h("div", { class: "md-typescale-body-small muted tabular", dataset: { testid: "bill-my-share" } }, mine ? `${memberName(viewAs!)} ${money(mine)}` : t("bills.notIn")))));
@@ -487,7 +559,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         const byId = new Map(state.bills.map((b) => [b.id, b]));
         listHost.querySelectorAll<HTMLElement>("[data-bill-id]").forEach((row) => {
           const b = byId.get(row.dataset.billId!);
-          if (b) attachRowGestures(row, { onSwipeLeft: () => swipeDelete(b), onLongPress: b.kind === "expense" ? () => duplicateBill(b) : undefined });
+          if (b && !pending.has(b.id)) attachRowGestures(row, { onSwipeLeft: () => swipeDelete(b), onLongPress: b.kind === "expense" ? () => duplicateBill(b) : undefined });
         });
       }
     }

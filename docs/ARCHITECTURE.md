@@ -6,11 +6,13 @@ Browser (SPA, Material Web M3)
    ▼
 Cloudflare Access  (configured manually by owner; service token for automated tests)
    ▼
-Worker "share"  (src/index.ts, Hono)          run_worker_first = true
-   ├── middleware: security headers, identity (Access JWT verify → email / svc:<id>), body limit, content-type
-   ├── /api/*  → routes (src/routes.ts) → D1 (binding DB, database "share-db")
+   ├── everything but /api/* → static assets from the edge (dist/, SPA fallback; headers: web/public/_headers)
+   ▼
+Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement = smart (runs near D1)
+   ├── middleware: security headers, identity (Access JWT verify → email / svc:<id>), body limit, content-type,
+   │               Server-Timing (D1 round trips + time)
+   ├── /api/*  → routes (src/routes.ts) → D1 (binding DB, database "share-db", APAC primary)
    │                                     → R2 RECEIPTS ("share-receipts": receipt photos)
-   ├── else    → env.ASSETS (dist/, Vite build of web/) with SPA fallback
    └── scheduled (daily 00:17 UTC) → backup D1 → R2 BACKUPS ("share-backups"),
                                     materialize recurring bills, purge 30-day-old soft deletes
                                     (independent steps: one failing doesn't skip the others)
@@ -25,7 +27,9 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 | `src/db.ts` | D1 queries (all parameterized) |
 | `src/lib/money.ts` | Equal split, balances (multi-payer, payments), settlement (pure) |
 | `src/lib/split.ts` | Largest-remainder allocation (shares/percent), itemized + service/VAT, fx conversion (BigInt) |
-| `src/lib/actor.ts` | "Who did it" from Access headers (display only, sanitized) |
+| `src/lib/identity.ts` | Verified identity (JWT email / `svc:<id>`), dev header identity, display label |
+| `src/lib/summary.ts` | Trip summary (balances, settlements, totals) — shared by the Worker and the optimistic UI |
+| `src/lib/dbtiming.ts` | Per-request D1 round-trip counter/timer (Server-Timing, slow-request log) |
 | `src/lib/promptpay-id.ts` | PromptPay id normalization (shared with web) |
 | `src/routes-social.ts`, `src/db-social.ts`, `src/lib/social.ts` | Comments, subgroups, read-only view links, move/merge |
 | `src/lib/body.ts` | `readLimited()` — size-capped body reads (also for chunked uploads) |
@@ -38,6 +42,8 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 | `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts` |
 | `web/src/` (others) | `i18n.ts` (TH/EN), `gestures.ts` (swipe/long-press/pull), `sample.ts` (onboarding), `categories.ts`, `dialogs.ts`, `dom.ts` (`h()`), `router.ts`, `store.ts` (recent groups) |
 | `web/public/theme.js` | Tiny blocking script: applies saved light/dark before first paint |
+| `web/public/_headers` | Security headers (CSP etc.) + immutable caching for static assets (the Worker no longer serves them) |
+| `.github/workflows/` | CI (local gate) + deploy (backup → deploy → prod tests → rollback) — draft, see `docs/CI.md` |
 | `dist/` | Built assets (git-ignored) |
 | `test/unit` | Pure logic (vitest, node) |
 | `test/integration` | Worker + D1 in workerd (`@cloudflare/vitest-plugin`) |
@@ -61,9 +67,6 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 - `subgroups(id, group_id FK, name, member_ids JSON)`
 - `groups.view_id` (unique, nullable): read-only link id, separate from the edit id
 
-**Latency budget**: on prod every D1 round trip is ~100–200 ms (writes in batches can spike higher), so handlers
-should batch statements and avoid per-item query loops (see `createOccurrences`).
-
 Shares and payers are stored resolved (cents per member), so the summary is a simple aggregation; `split_json`
 keeps the user's input (weights / percents / items) for editing. Writes of a bill + its children + activity
 row use `DB.batch()` (atomic). Deletes are soft (`deleted_at`), purged after 30 days.
@@ -73,11 +76,33 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 `bash scripts/verify-migration.sh` before applying such a migration remotely, and export prod first
 (`npx wrangler d1 export share-db --remote --output backup-before-XXXX.sql`).
 
+## Performance (v0.5)
+
+Prod D1 has one primary (APAC, no read replicas); each round trip from the Worker costs tens of ms and write
+batches far more (ISSUES #28). Rules:
+
+- **Count round trips, not statements.** Every `/api/*` response has `Server-Timing: db;dur=<ms>;desc="<n> round
+  trips", app;dur=<ms>` (`src/lib/dbtiming.ts` wraps the binding per request); requests over 800 ms log
+  `slow request` (route shape only — ids are secrets) to Workers Logs. `test/integration/perf.test.ts` pins budgets.
+- **A write reads its result back in the same `batch()`** (create/update bill, restore, create group, comment):
+  the batch runs sequentially in one transaction, so the trailing SELECTs see the new rows.
+- **Validation reads go in one batch** (`billWriteContext`: member ids + bill count + exists).
+- **Activity rows that need the bill are `INSERT … SELECT json_object(…) FROM bills … AND changes() > 0`**, so
+  delete/restore need no read first and log nothing when the update changed nothing.
+- **The trip page is one request**, `GET /api/groups/:gid/full` (one batch of 8 SELECTs) instead of five.
+- Budget per route (incl. the access check): add / edit bill ≤ 3, delete / restore ≤ 2, page ≤ 3, create trip 1.
+- **Smart Placement** runs the Worker near D1; only `/api/*` runs the Worker (`run_worker_first`), so pages and
+  bundles still come from the edge closest to the user.
+- **Optimistic UI** (web): bill add/edit/delete show immediately (row marked "Saving…", totals recomputed with
+  `src/lib/summary.ts` — the Worker's own code); the server answer replaces it, a failure rolls back with an
+  "Edit" action that reopens what was typed. Recurring bills, moves, people and settings still wait for the server.
+- Avoid per-item query loops (see `createOccurrences`).
+
 ## Security model
 
 - Authentication: **Cloudflare Access** in front of the whole hostname, and the Worker verifies
   `Cf-Access-Jwt-Assertion` (RS256 via team JWKS; `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` in `wrangler.jsonc`) on every
-  request → 401 otherwise. Identity = JWT `email`, or `svc:<common_name>` for service tokens (`src/lib/identity.ts`).
+  API request → 401 otherwise. Identity = JWT `email`, or `svc:<common_name>` for service tokens (`src/lib/identity.ts`).
   Headers like `Cf-Access-Authenticated-User-Email` are **never** trusted on prod; only with `DEV_IDENTITY=1`
   (local `wrangler dev --var`, integration config). Neither configured → identity null → trip routes 401 (fail closed).
 - Authorization (v0.4): a trip is visible only to identities linked to one of its people (`members.email`).
@@ -87,7 +112,9 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
   Move/merge check membership in both trips (404 otherwise). The last link can't be removed (no orphaned trips).
 - Every member/bill lookup is scoped by `group_id` (no cross-group IDOR).
 - Headers: strict CSP (`'self'` only — fonts/icons self-hosted, no third parties), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
-  (group ids live in URLs), `X-Content-Type-Options: nosniff`, HSTS, Permissions-Policy.
+  (group ids live in URLs), `X-Content-Type-Options: nosniff`, HSTS, Permissions-Policy. Set by the Worker on
+  `/api/*` and by `web/public/_headers` on static assets (since v0.5 the Worker doesn't serve them) — keep both in sync.
+  Static assets are behind Access too, but no longer pass the in-Worker JWT check (they hold no data).
 - Writes require `Content-Type: application/json` (blocks simple-form CSRF), 32 KiB body cap — even bodyless
   POSTs (restore) send `{}`. Receipt upload is the one exception: `image/jpeg|png|webp`, ≤ 2 MiB, magic-byte
   sniffed, served back with its own `Content-Security-Policy: default-src 'none'; sandbox` (not overwritten).

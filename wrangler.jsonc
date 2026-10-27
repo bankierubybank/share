@@ -10,8 +10,12 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": true
+    // Only the API runs the Worker; pages/bundles come straight from the edge (headers: web/public/_headers).
+    // Lets Smart Placement move the API next to D1 without slowing page loads (docs/ARCHITECTURE.md → Performance).
+    "run_worker_first": ["/api/*"]
   },
+  // Each API request makes several D1 round trips; run it near the database (APAC primary) instead of near the user.
+  "placement": { "mode": "smart" },
   "d1_databases": [
     {
       "binding": "DB",

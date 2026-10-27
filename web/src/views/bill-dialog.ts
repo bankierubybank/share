@@ -24,14 +24,30 @@ export interface BillDialogOptions {
   payment?: { from: string; to: string; amount: number };
   /** "Viewing as" member: default payer for quick add. */
   viewAs?: string | null;
-  /** Called after a successful delete (the caller offers Undo). */
-  onDeleted?: (bill: Bill) => void;
+  /** Called after a delete (the caller offers Undo); `deleting` = the request, when it's still on its way. */
+  onDeleted?: (bill: Bill, deleting?: Promise<unknown>) => void;
+  /**
+   * Optimistic saves: when set, Save/Delete close the dialog at once and hand over the request instead of
+   * waiting for it (the caller shows the result immediately and rolls back on failure).
+   */
+  onSaving?: (op: PendingSave) => void;
+  /** Prefill a NEW bill with everything, date included (reopening a save that failed). */
+  draft?: Bill;
   /** Saved subgroups for one-tap "split between" picks. */
   subgroups?: Subgroup[];
   /** Prefill a NEW bill from an existing one (Duplicate / long-press). */
   template?: Bill;
   /** Edit mode: user asked to duplicate this bill (caller opens a new dialog with it as template). */
   onDuplicate?: (bill: Bill) => void;
+}
+
+export interface PendingSave {
+  /** Bill id; "tmp-…" for a bill that doesn't exist yet. */
+  id: string;
+  /** What to show meanwhile; null = being deleted. */
+  bill: Bill | null;
+  /** Resolves with the saved bill (null for a delete); rejects with the server's error. */
+  done: Promise<Bill | null>;
 }
 
 const today = () => {
@@ -54,7 +70,7 @@ const MODES: SplitMode[] = ["equal", "exact", "shares", "percent", "itemized"];
 /** Opens add/edit dialog. Resolves true when something was saved or deleted. */
 export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> {
   const { group, members, bill } = opts;
-  const src = bill ?? opts.template;
+  const src = bill ?? opts.draft ?? opts.template;
   const gid = group.id;
   const currency = group.currency;
   const memberIds = new Set(members.map((m) => m.id));
@@ -141,7 +157,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     dataset: { testid: "bill-description" },
   }) as Field;
 
-  const date = h("md-outlined-text-field", { label: t("bill.date"), type: "date", value: bill?.date ?? today(), required: true, dataset: { testid: "bill-date" } }) as Field;
+  const date = h("md-outlined-text-field", { label: t("bill.date"), type: "date", value: (bill ?? opts.draft)?.date ?? today(), required: true, dataset: { testid: "bill-date" } }) as Field;
 
   const memberOptions = (sel: string) =>
     members.map((m) => h("md-select-option", { value: m.id, selected: m.id === sel }, h("div", { slot: "headline" }, m.name)));
@@ -479,6 +495,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
         return;
       }
     }
+    if (opts.onSaving && repeat === "none") return saveOptimistic(body);
     saveBtn.disabled = true;
     try {
       let saved: Bill | null = null;
@@ -502,9 +519,51 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     }
   }
 
+  /** Closes now; the request runs on behind the scenes (see BillDialogOptions.onSaving). */
+  function saveOptimistic(body: BillInput) {
+    let parsed;
+    try {
+      parsed = parseBill(body, memberIds, currency); // the server's own validator: what it will store
+    } catch (e) {
+      formError.textContent = e instanceof ValidationError ? humanize(e.message) : t("bill.err.check");
+      return;
+    }
+    const now = new Date().toISOString();
+    const shown: Bill = {
+      ...(bill ?? { hasReceipt: false, recurrenceId: null, createdBy: null, createdAt: now, commentCount: 0 }),
+      id: bill?.id ?? `tmp-${crypto.randomUUID()}`,
+      kind: parsed.kind, description: parsed.description, amount: parsed.amount, paidBy: parsed.payers[0].memberId,
+      payers: parsed.payers, date: parsed.date, category: parsed.category, splitMode: parsed.splitMode,
+      split: parsed.split as Split, shares: parsed.shares, fx: parsed.fx, updatedAt: now,
+    };
+    if (pendingReceipt || removeReceipt) shown.hasReceipt = !!pendingReceipt;
+    const receipt = pendingReceipt;
+    const dropReceipt = removeReceipt && !!bill?.hasReceipt;
+    const done = (async () => {
+      const saved = bill ? (await api.updateBill(gid, bill.id, body)).bill : (await api.createBill(gid, body)).bill;
+      try {
+        if (receipt) await api.uploadReceipt(gid, saved.id, receipt);
+        else if (dropReceipt) await api.deleteReceipt(gid, saved.id);
+      } catch {
+        snackbar(t("bill.receiptFailed")); // the bill itself is saved; only the photo didn't make it
+      }
+      return saved;
+    })();
+    if (kind === "expense" && !multiPayer) store.set(lastPayerKey(gid), paidBy.value);
+    snackbar(bill ? t("bill.updated") : kind === "payment" ? t("bill.paymentRecorded") : t("bill.added"));
+    opts.onSaving!({ id: shown.id, bill: shown, done });
+    dialog.close("saved");
+  }
+
   async function remove() {
     if (!bill) return;
     if (!(await confirmDialog(t("bill.deleteTitle"), t("bill.deleteText", { desc: bill.description })))) return;
+    if (opts.onSaving) {
+      const deleting = api.deleteBill(gid, bill.id).then(() => null);
+      opts.onSaving({ id: bill.id, bill: null, done: deleting });
+      opts.onDeleted?.(bill, deleting);
+      return dialog.close("deleted");
+    }
     try {
       await api.deleteBill(gid, bill.id);
       changed = true;

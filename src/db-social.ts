@@ -42,13 +42,13 @@ export async function addComment(
   db: D1Database, gid: string, bid: string, body: string, authorMemberId: string | null, actor: string | null, billDescription: string,
 ): Promise<Comment> {
   const id = entityId();
-  await db.batch([
+  const r = await db.batch([
     db.prepare("INSERT INTO bill_comments (id, bill_id, group_id, author_member_id, actor, body) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(id, bid, gid, authorMemberId, actor, body),
     logActivity(db, gid, actor, "comment.add", bid, { description: billDescription, excerpt: body.slice(0, 80) }),
+    db.prepare("SELECT id, bill_id, author_member_id, actor, body, created_at FROM bill_comments WHERE id = ?").bind(id),
   ]);
-  const r = await db.prepare("SELECT id, bill_id, author_member_id, actor, body, created_at FROM bill_comments WHERE id = ?").bind(id).first<CommentRow>();
-  return toComment(r!);
+  return toComment((r[2].results as CommentRow[])[0]);
 }
 
 export async function deleteComment(db: D1Database, gid: string, bid: string, cid: string): Promise<boolean> {

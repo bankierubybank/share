@@ -43,9 +43,16 @@ export async function openAddBill(page: Page) {
   await expect(page.getByTestId("bill-dialog")).toHaveAttribute("data-ready", "1");
 }
 
+/** Saves are optimistic (v0.5): the dialog closes at once; wait until the server has it and the page re-rendered. */
 export async function saveBill(page: Page) {
   await page.getByTestId("bill-save").click();
   await expect(page.getByTestId("bill-dialog")).toHaveCount(0);
+  await settled(page);
+}
+
+/** No bill row is still "Saving…" (and the re-render with the server's data happened). */
+export async function settled(page: Page) {
+  await expect(page.locator("[data-saving]")).toHaveCount(0);
 }
 
 export async function addEqualBill(page: Page, desc: string, amount: string, paidBy: string) {

@@ -4,6 +4,7 @@ import { ValidationError } from "./lib/validate";
 import { verifyAccessJwt } from "./lib/access";
 import { devIdentity, identityFromClaims, isDevIdentity } from "./lib/identity";
 import { readLimited } from "./lib/body";
+import { timedD1 } from "./lib/dbtiming";
 
 const MAX_BODY = 32 * 1024;
 
@@ -90,8 +91,23 @@ app.onError((err, c) => {
   return apiError(c, 500, "internal", "internal error");
 });
 
+const SLOW_MS = 800;
+
 export default {
-  fetch: app.fetch,
+  // API responses carry `Server-Timing: db;dur=…;desc="N round trips", app;dur=…` (docs/ARCHITECTURE.md → Performance).
+  async fetch(req, env, ctx) {
+    const t0 = performance.now();
+    const timer = timedD1(env.DB);
+    const res = await app.fetch(req, { ...env, DB: timer.db }, ctx);
+    const path = new URL(req.url).pathname;
+    if (!path.startsWith("/api/")) return res;
+    const ms = performance.now() - t0;
+    const out = new Response(res.body, res);
+    out.headers.append("Server-Timing", `db;dur=${Math.round(timer.ms())};desc="${timer.count()} round trips", app;dur=${Math.round(ms)}`);
+    // Ids in the path are secrets: log the route shape only.
+    if (ms > SLOW_MS) console.warn("slow request", { method: req.method, route: path.replace(/[A-Za-z0-9_-]{16,}/g, ":id"), ms: Math.round(ms), db: timer.count(), dbMs: Math.round(timer.ms()) });
+    return out;
+  },
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(scheduledMaintenance(env));
   },

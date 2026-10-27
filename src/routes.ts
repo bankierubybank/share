@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import * as db from "./db";
-import { computeBalances, computeSettlements } from "./lib/money";
+import { summarize } from "./lib/summary";
 import { ENTITY_ID_RE, GROUP_ID_RE, randomId } from "./lib/ids";
 import {
   LIMITS, ValidationError, nextOccurrence, parseBill, parseGroupPatch, parseMember, parseNewGroup, parseRecurrence,
@@ -18,7 +18,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -160,6 +160,20 @@ g.get("/", async (c) => {
   return c.json({ group, members, bills, me: c.get("me") });
 });
 
+/** The whole trip page in one request: GET / + summary + recurring + activity (first 50) + subgroups. */
+g.get("/full", async (c) => {
+  const group = c.get("group");
+  if (!group.archived) await materializeDue(c.env, group.id);
+  const p = await db.groupPage(c.env.DB, group.id, 50);
+  return c.json({
+    group, members: p.members, bills: p.bills, me: c.get("me"),
+    summary: summaryOf(p.members, p.bills),
+    recurring: p.recurring,
+    activity: p.activity.map((a) => ({ ...a, restorable: a.action === "bill.delete" && a.entityId !== null && p.deleted.has(a.entityId) })),
+    subgroups: p.subgroups,
+  });
+});
+
 /** "This is me": claim an unclaimed trip, or move my link to another (unlinked) person. */
 g.post("/me", async (c) => {
   const body = await readJson(c);
@@ -248,19 +262,22 @@ async function memberIdSet(c: GCtx) {
   return new Set((await db.listMembers(c.env.DB, gidOf(c))).map((m) => m.id));
 }
 
+// Bill writes: middleware + one context read + one write batch (which also reads the bill back) = 3 round trips.
 g.post("/bills", async (c) => {
   const gid = gidOf(c);
-  const input = parseBill(await readJson(c), await memberIdSet(c), c.get("group").currency);
-  if ((await db.countRows(c.env.DB, "bills", gid)) >= LIMITS.billsPerGroup)
-    return apiError(c, 409, "conflict", `at most ${LIMITS.billsPerGroup} bills per group`);
+  const ctx = await db.billWriteContext(c.env.DB, gid);
+  const input = parseBill(await readJson(c), ctx.memberIds, c.get("group").currency);
+  if (ctx.billCount >= LIMITS.billsPerGroup) return apiError(c, 409, "conflict", `at most ${LIMITS.billsPerGroup} bills per group`);
   return c.json({ bill: await db.createBill(c.env.DB, gid, input, actor(c)) }, 201);
 });
 
 g.put("/bills/:bid", async (c) => {
   const bid = c.req.param("bid");
   const gid = gidOf(c);
-  if (!ENTITY_ID_RE.test(bid) || !(await db.getBill(c.env.DB, gid, bid))) return apiError(c, 404, "not_found", "bill not found");
-  const input = parseBill(await readJson(c), await memberIdSet(c), c.get("group").currency);
+  if (!ENTITY_ID_RE.test(bid)) return apiError(c, 404, "not_found", "bill not found");
+  const ctx = await db.billWriteContext(c.env.DB, gid, bid);
+  if (!ctx.exists) return apiError(c, 404, "not_found", "bill not found");
+  const input = parseBill(await readJson(c), ctx.memberIds, c.get("group").currency);
   return c.json({ bill: await db.updateBill(c.env.DB, gid, bid, input, actor(c)) });
 });
 
@@ -331,12 +348,7 @@ g.delete("/bills/:bid/receipt", async (c) => {
 // ---------- summary / activity ----------
 
 export function summaryOf(members: db.Member[], bills: db.Bill[]) {
-  const balances = computeBalances(members.map((m) => m.id), bills);
-  const expenses = bills.filter((b) => b.kind === "expense");
-  const byCategory: Record<string, number> = {};
-  for (const b of expenses) byCategory[b.category] = (byCategory[b.category] ?? 0) + b.amount;
-  const total = expenses.reduce((a, b) => a + b.amount, 0);
-  return { balances, settlements: computeSettlements(balances), total, byCategory };
+  return summarize(members.map((m) => m.id), bills);
 }
 
 g.get("/summary", async (c) => {

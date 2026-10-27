@@ -1,0 +1,72 @@
+# DRAFT (#18) — inactive until the repo has a GitHub remote and the secrets below exist. See docs/CI.md.
+# After `ci` passes on main: back up prod D1 → deploy (build + remote migrations + wrangler deploy) → prod tests.
+# Prod tests failing → roll the Worker back to the previous version (migrations are NOT rolled back:
+# they must stay backwards-compatible, see docs/ARCHITECTURE.md → Data model).
+name: deploy
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false # never cancel a deploy halfway
+
+jobs:
+  ship:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Optional: add required reviewers to this environment (Settings → Environments) to approve each deploy.
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d20bca6d49889066d98d858a37f6837e
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      PROD_URL: https://share.bankierubybank.workers.dev
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+
+      - name: Back up prod D1 before migrating
+        # Kept in the share-backups R2 bucket, never as a GitHub artifact (it holds people's emails and bills).
+        run: |
+          mkdir -p .tmp
+          f=".tmp/prod-before-${GITHUB_SHA::7}.sql"
+          npx wrangler d1 export share-db --remote --output "$f"
+          npx wrangler r2 object put "share-backups/predeploy/$(date -u +%Y-%m-%dT%H%M)-${GITHUB_SHA::7}.sql" --file "$f" --remote
+
+      - name: Deploy
+        run: npm run deploy
+
+      - name: Prod tests
+        id: prod
+        run: npm run test:prod
+
+      - name: Roll back the Worker if prod tests failed
+        if: failure() && steps.prod.outcome == 'failure'
+        run: npx wrangler rollback --message "CI: prod tests failed for ${GITHUB_SHA::7}" -y
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

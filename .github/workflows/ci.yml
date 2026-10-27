@@ -1,0 +1,45 @@
+# DRAFT (#18) — inactive until the repo has a GitHub remote. See docs/CI.md.
+# Every push / PR: the same gate as `npm run test:local` (typecheck → unit → build → integration →
+# wrangler dev → system / security / E2E). No secrets needed: everything runs against a local Worker + local D1.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - name: Playwright browsers
+        # Firefox stays out of the matrix (docs/ISSUES.md #1) — add it here if it launches on Linux.
+        run: npx playwright install --with-deps chromium webkit
+      - name: Local gate
+        run: npm run test:local
+        env:
+          COMPAT_PROJECTS: chromium webkit mobile-chrome mobile-safari
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+            .wrangler-dev.log
+          retention-days: 7

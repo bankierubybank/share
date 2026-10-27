@@ -1,6 +1,7 @@
-# API Contract (v4 — app 0.4.0)
+# API Contract (v4 — app 0.5.0)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
+Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
 
 Write requests (`POST/PUT/PATCH`) with a body **must** send `Content-Type: application/json`, else `415`.
 Body limit 32 KiB → `413` (also enforced for chunked bodies without Content-Length). Exception: receipt upload (`PUT …/receipt`) takes a raw `image/jpeg|png|webp` body ≤ 2 MiB.
@@ -87,6 +88,7 @@ default `dev@example.com`). The group id is still unguessable, but no longer eno
 | GET | `/api/me` | – | `{ actor: string \| null }` (Access email, `"service token"`, or null) |
 | POST | `/api/groups` | `{ name, currency, members: string[], me?: index }` | `201 { group, members, me }` (creator linked to `members[me]`) |
 | GET | `/api/groups/:gid` | – | `{ group, members, bills, me }` (`me` = my member id; live bills, newest first; materializes due recurring bills) |
+| GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups }` — same values as the separate endpoints |
 | PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
 | DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
 | POST | `/api/groups/:gid/members` | `{ name, promptpay?, email? }` | `201 { member }` |

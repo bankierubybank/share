@@ -2,7 +2,9 @@
 
 _Last updated: 2026-10-27_
 
-## Status: v0.4.0 (trip membership) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access), local + prod tests green
+## Status: v0.5.0 (faster saves, fewer D1 round trips) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version ab697568)
+
+Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2 prod-only), E2E 53×4 (212) — green.
 
 | Area | State |
 |------|-------|
@@ -71,8 +73,18 @@ _Last updated: 2026-10-27_
 | 17 | Onboarding (sample data + tips) | ✅ |
 | 18 | Smaller bundle (lazy chunks) | ✅ home JS −32% |
 
+## v0.5 status (round 3 picks)
+
+| # | Item | State |
+|---|------|-------|
+| 15 | D1 write latency: fewer round trips, one-request trip page, Smart Placement, Server-Timing | ✅ |
+| 13 | Faster saves: optimistic bill add/edit/delete with rollback | ✅ |
+| 18 | Git remote + CI | 📝 drafted (`.github/workflows/`, `docs/CI.md`); needs owner: GitHub repo + secrets |
+
 ## Next ideas (backlog)
-- Not picked yet (round-2 list): #1 live FX rates, #2 receipt scan (Workers AI), #3 budgets, #5 bill templates,
-  #7 reminders (email/LINE), #9 import Splitwise/KittySplit, #13 PWA/offline, #15 live refresh, #19 in-Worker Access JWT (done in 0.4.0),
-  #20 rate limiting, #21 staging, #22 git remote + CI, #23 error tracking/uptime, #24 restore drill, #25 Firefox in matrix.
-- Live exchange rates (needs an external FX source).
+- Round 3, not picked: #1 invite link / join request, #2 email autocomplete, #3 per-person balance on home,
+  #4 "my spending" across trips, #5 live FX, #6 receipt scan (Workers AI), #7 budgets, #8 bill templates,
+  #9 reminders, #10 import Splitwise/KittySplit, #11 PWA/offline, #12 live refresh, #14 leave trip,
+  #16 rate limiting, #17 staging env, #19 error tracking/uptime, #20 restore drill, #21 Firefox in matrix.
+- If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
+  Durable Object per trip (writes local to the object).

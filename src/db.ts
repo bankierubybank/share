@@ -127,14 +127,15 @@ export async function createGroup(
 ) {
   const gid = groupId();
   const members: Member[] = memberNames.map((n, i) => ({ id: entityId(), name: n, promptpay: null, email: i === me ? identity : null }));
-  await db.batch([
+  const r = await db.batch([
     db.prepare("INSERT INTO groups (id, name, currency) VALUES (?, ?, ?)").bind(gid, name, currency),
     ...members.map((m, i) =>
       db.prepare("INSERT INTO members (id, group_id, name, position, email) VALUES (?, ?, ?, ?, ?)").bind(m.id, gid, m.name, i, m.email),
     ),
     logActivity(db, gid, actor, "group.create", gid, { name, members: memberNames.length }),
+    db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid),
   ]);
-  return { group: (await getGroup(db, gid))!, members };
+  return { group: toGroup((r[r.length - 1].results as GroupRow[])[0]), members };
 }
 
 export async function getGroup(db: D1Database, gid: string): Promise<Group | null> {
@@ -220,8 +221,9 @@ export async function updateGroup(
     stmts.push(logActivity(db, gid, actor, "group.currency", gid, { from: before.currency, to: patch.currency }));
   if (patch.archived !== undefined && patch.archived !== before.archived)
     stmts.push(logActivity(db, gid, actor, patch.archived ? "group.archive" : "group.unarchive", gid, null));
-  await db.batch(stmts);
-  return getGroup(db, gid);
+  const r = await db.batch([...stmts, db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid)]);
+  const row = (r[r.length - 1].results as GroupRow[])[0];
+  return row ? toGroup(row) : null;
 }
 
 /** Hard delete (cascades). Returns receipt keys so the caller can remove them from R2. */
@@ -343,33 +345,70 @@ const JOIN_MEMBER = "JOIN members m ON m.id = x.member_id";
 const MEMBER_ORDER = "ORDER BY m.position, m.created_at";
 const ORDER_BY_MEMBER = `${JOIN_MEMBER} ${MEMBER_ORDER}`;
 
-export async function listBills(db: D1Database, gid: string): Promise<Bill[]> {
+// Reads come as statement triples (bills, shares, payers) so they can ride in the same batch as a write:
+// on prod every D1 round trip costs ~40 ms+ and a write batch far more, so a save is one batch, not write + reads.
+
+const listBillStatements = (db: D1Database, gid: string) => {
   const live = "b.group_id = ? AND b.deleted_at IS NULL";
-  const [bills, shares, payers] = await db.batch([
+  return [
     db.prepare(`SELECT ${BILL_COLS} FROM bills b WHERE ${live} ORDER BY b.date DESC, b.created_at DESC`).bind(gid),
     db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_shares x JOIN bills b ON b.id = x.bill_id AND ${live} ${ORDER_BY_MEMBER}`).bind(gid),
     db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_payers x JOIN bills b ON b.id = x.bill_id AND ${live} ${ORDER_BY_MEMBER}`).bind(gid),
-  ]);
+  ];
+};
+
+const billStatements = (db: D1Database, gid: string, bid: string, includeDeleted = false) => [
+  db.prepare(`SELECT ${BILL_COLS} FROM bills b WHERE b.id = ? AND b.group_id = ?${includeDeleted ? "" : " AND b.deleted_at IS NULL"}`).bind(bid, gid),
+  db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_shares x ${JOIN_MEMBER} WHERE x.bill_id = ? ${MEMBER_ORDER}`).bind(bid),
+  db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_payers x ${JOIN_MEMBER} WHERE x.bill_id = ? ${MEMBER_ORDER}`).bind(bid),
+];
+
+function billsFrom([bills, shares, payers]: D1Result[]): Bill[] {
   const s = groupShares(shares.results as ShareRow[]);
   const p = groupShares(payers.results as ShareRow[]);
   return (bills.results as BillRow[]).map((b) => toBill(b, s.get(b.id) ?? [], p.get(b.id) ?? []));
 }
 
+export async function listBills(db: D1Database, gid: string): Promise<Bill[]> {
+  return billsFrom(await db.batch(listBillStatements(db, gid)));
+}
+
 export async function getBill(db: D1Database, gid: string, bid: string, includeDeleted = false): Promise<Bill | null> {
-  const b = await db
-    .prepare(`SELECT ${BILL_COLS} FROM bills b WHERE b.id = ? AND b.group_id = ?${includeDeleted ? "" : " AND b.deleted_at IS NULL"}`)
-    .bind(bid, gid)
-    .first<BillRow>();
-  if (!b) return null;
-  const [shares, payers] = await db.batch([
-    db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_shares x ${JOIN_MEMBER} WHERE x.bill_id = ? ${MEMBER_ORDER}`).bind(bid),
-    db.prepare(`SELECT x.bill_id, x.member_id, x.amount FROM bill_payers x ${JOIN_MEMBER} WHERE x.bill_id = ? ${MEMBER_ORDER}`).bind(bid),
+  return billsFrom(await db.batch(billStatements(db, gid, bid, includeDeleted)))[0] ?? null;
+}
+
+/** What a bill write needs to validate, in one round trip: member ids, live bill count, and whether `bid` exists. */
+export async function billWriteContext(db: D1Database, gid: string, bid?: string) {
+  const [members, count, exists] = await db.batch([
+    db.prepare("SELECT id FROM members WHERE group_id = ?").bind(gid),
+    db.prepare("SELECT COUNT(*) AS n FROM bills WHERE group_id = ? AND deleted_at IS NULL").bind(gid),
+    db.prepare("SELECT 1 AS ok FROM bills WHERE id = ? AND group_id = ? AND deleted_at IS NULL").bind(bid ?? "", gid),
   ]);
-  return toBill(
-    b,
-    (shares.results as ShareRow[]).map((s) => ({ memberId: s.member_id, amount: s.amount })),
-    (payers.results as ShareRow[]).map((s) => ({ memberId: s.member_id, amount: s.amount })),
-  );
+  return {
+    memberIds: new Set((members.results as { id: string }[]).map((m) => m.id)),
+    billCount: (count.results as { n: number }[])[0]?.n ?? 0,
+    exists: exists.results.length > 0,
+  };
+}
+
+/** Everything the trip page shows, in one batch (was five requests of 2–4 round trips each). */
+export async function groupPage(db: D1Database, gid: string, activityLimit: number) {
+  const r = await db.batch([
+    db.prepare("SELECT id, name, promptpay, email FROM members WHERE group_id = ? ORDER BY position, created_at").bind(gid),
+    ...listBillStatements(db, gid),
+    db.prepare("SELECT * FROM recurrences WHERE group_id = ? ORDER BY active DESC, next_date").bind(gid),
+    activityStatement(db, gid, activityLimit),
+    db.prepare("SELECT id FROM bills WHERE group_id = ? AND deleted_at IS NOT NULL").bind(gid),
+    db.prepare("SELECT id, name, member_ids FROM subgroups WHERE group_id = ? ORDER BY created_at, id").bind(gid),
+  ]);
+  return {
+    members: r[0].results as unknown as Member[],
+    bills: billsFrom(r.slice(1, 4)),
+    recurring: (r[4].results as unknown as RecRow[]).map(toRec),
+    activity: (r[5].results as unknown as ActivityRow[]).map(toActivity),
+    deleted: new Set((r[6].results as { id: string }[]).map((x) => x.id)),
+    subgroups: (r[7].results as { id: string; name: string; member_ids: string }[]).map((s) => ({ id: s.id, name: s.name, memberIds: JSON.parse(s.member_ids) as string[] })),
+  };
 }
 
 const childInserts = (db: D1Database, bid: string, input: BillInput) => [
@@ -404,8 +443,8 @@ export async function createBill(
   db: D1Database, gid: string, input: BillInput, actor: string | null, recurrenceId: string | null = null,
 ): Promise<Bill> {
   const bid = entityId();
-  await db.batch(billInsertStatements(db, gid, bid, input, actor, recurrenceId));
-  return (await getBill(db, gid, bid))!;
+  const r = await db.batch([...billInsertStatements(db, gid, bid, input, actor, recurrenceId), ...billStatements(db, gid, bid)]);
+  return billsFrom(r.slice(-3))[0];
 }
 
 /**
@@ -424,8 +463,8 @@ export async function createOccurrences(
 }
 
 export async function updateBill(db: D1Database, gid: string, bid: string, input: BillInput, actor: string | null): Promise<Bill | null> {
-  // Existence + group scope checked by caller; batch is atomic.
-  await db.batch([
+  // Existence + group scope checked by caller; batch is atomic and reads the result back in the same round trip.
+  const r = await db.batch([
     db
       .prepare(
         `UPDATE bills SET kind = ?, description = ?, amount = ?, paid_by = ?, date = ?, split_mode = ?, split_json = ?, category = ?,
@@ -439,27 +478,37 @@ export async function updateBill(db: D1Database, gid: string, bid: string, input
     db.prepare("DELETE FROM bill_payers WHERE bill_id = ?").bind(bid),
     ...childInserts(db, bid, input),
     logActivity(db, gid, actor, "bill.update", bid, billDetail(input)),
+    ...billStatements(db, gid, bid),
   ]);
-  return getBill(db, gid, bid);
+  return billsFrom(r.slice(-3))[0] ?? null;
 }
 
-/** Soft delete: restorable via restoreBill until purged (30 days). */
+/** Activity row for bill `bid`, built from the row itself (no read first). Logged only if the previous statement changed it. */
+const billActivity = (db: D1Database, gid: string, bid: string, actor: string | null, action: string) =>
+  db
+    .prepare(
+      `INSERT INTO activity (id, group_id, actor, action, entity_id, detail)
+       SELECT ?, group_id, ?, ?, id, json_object('description', description, 'amount', amount, 'kind', kind)
+       FROM bills WHERE id = ? AND group_id = ? AND changes() > 0`,
+    )
+    .bind(entityId(), actor, action, bid, gid);
+
+/** Soft delete (one round trip): restorable via restoreBill until purged (30 days). */
 export async function deleteBill(db: D1Database, gid: string, bid: string, actor: string | null): Promise<boolean> {
-  const b = await getBill(db, gid, bid);
-  if (!b) return false;
-  await db.batch([
+  const [upd] = await db.batch([
     db.prepare(`UPDATE bills SET deleted_at = ${NOW} WHERE id = ? AND group_id = ? AND deleted_at IS NULL`).bind(bid, gid),
-    logActivity(db, gid, actor, "bill.delete", bid, { description: b.description, amount: b.amount, kind: b.kind }),
+    billActivity(db, gid, bid, actor, "bill.delete"),
   ]);
-  return true;
+  return upd.meta.changes > 0;
 }
 
 export async function restoreBill(db: D1Database, gid: string, bid: string, actor: string | null): Promise<Bill | null> {
-  const r = await db.prepare("UPDATE bills SET deleted_at = NULL WHERE id = ? AND group_id = ? AND deleted_at IS NOT NULL").bind(bid, gid).run();
-  if (!r.meta.changes) return null;
-  const b = (await getBill(db, gid, bid))!;
-  await logActivity(db, gid, actor, "bill.restore", bid, { description: b.description, amount: b.amount, kind: b.kind }).run();
-  return b;
+  const r = await db.batch([
+    db.prepare("UPDATE bills SET deleted_at = NULL WHERE id = ? AND group_id = ? AND deleted_at IS NOT NULL").bind(bid, gid),
+    billActivity(db, gid, bid, actor, "bill.restore"),
+    ...billStatements(db, gid, bid),
+  ]);
+  return r[0].meta.changes ? billsFrom(r.slice(-3))[0] : null;
 }
 
 export async function deletedBillIds(db: D1Database, gid: string): Promise<Set<string>> {
@@ -501,16 +550,20 @@ export function logActivity(db: D1Database, gid: string, actor: string | null, a
     .bind(entityId(), gid, actor, action, ref, detail === null ? null : JSON.stringify(detail));
 }
 
-export async function listActivity(db: D1Database, gid: string, limit: number, before?: string): Promise<Activity[]> {
-  const { results } = await db
+interface ActivityRow { id: string; at: string; actor: string | null; action: string; entity_id: string | null; detail: string | null }
+const toActivity = (r: ActivityRow): Activity => ({
+  id: r.id, at: r.at, actor: r.actor, action: r.action, entityId: r.entity_id, detail: r.detail ? JSON.parse(r.detail) : null,
+});
+const activityStatement = (db: D1Database, gid: string, limit: number, before?: string) =>
+  db
     .prepare(
-      `SELECT id, at, actor, action, entity_id, detail FROM activity WHERE group_id = ?${before ? " AND at < ?" : ""} ORDER BY at DESC, id DESC LIMIT ${limit}`,
+      `SELECT id, at, actor, action, entity_id, detail FROM activity WHERE group_id = ?${before ? " AND at < ?" : ""} ORDER BY at DESC, id DESC LIMIT ${Math.floor(limit)}`,
     )
-    .bind(...(before ? [gid, before] : [gid]))
-    .all<{ id: string; at: string; actor: string | null; action: string; entity_id: string | null; detail: string | null }>();
-  return results.map((r) => ({
-    id: r.id, at: r.at, actor: r.actor, action: r.action, entityId: r.entity_id, detail: r.detail ? JSON.parse(r.detail) : null,
-  }));
+    .bind(...(before ? [gid, before] : [gid]));
+
+export async function listActivity(db: D1Database, gid: string, limit: number, before?: string): Promise<Activity[]> {
+  const { results } = await activityStatement(db, gid, limit, before).all<ActivityRow>();
+  return results.map(toActivity);
 }
 
 // ---------- recurrences ----------
