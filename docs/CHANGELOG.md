@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0 — 2026-10-27 (deployed, version f8bfa8f1)
+
+Owner request: "limit view on trip you involved" — ABC on trip 1, CDE on trip 2 → A, B see trip 1; C sees both.
+
+### Added
+- **Trip membership**: people can carry an email (their Cloudflare Access login). A trip opens only for identities
+  linked to one of its people; everyone else gets "Not your trip" (403 `not_member`) — the link alone is no longer enough.
+- **My trips** on home from the server (`GET /api/me/groups`, works on any device); this-device-only entries stay
+  listed as "on this device only" (e.g. trips not claimed yet).
+- Creating a trip links you to the first person ("Ann (you)"); People shows each person's email / "No email",
+  a "You" tag, an Email field in the edit dialog and "This is me" (move your link, `POST /api/groups/:gid/me`).
+- **Pre-0.4 trips** (nobody linked): the first visitor picks who they are ("Which one are you?"), then the trip is locked.
+- Guards: the last linked person can't be unlinked/removed (409 `last_link`); move/merge need you in both trips
+  (404 otherwise); people added by move/merge get no email; view links and activity never show emails.
+- Migration `0004_membership` (additive: `members.email` + indexes). API v4 (docs/API.md → Membership).
+
+### Security
+- In-Worker Cloudflare Access JWT verification is now **on** (`ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` in wrangler.jsonc —
+  was backlog #19): identity = verified JWT email, or `svc:<client id>` for service tokens. Identity headers are
+  never trusted on prod; local dev/tests use `--var DEV_IDENTITY:1` (header-based, default `dev@example.com`).
+- `src/lib/actor.ts` (unverified header/JWT read, display-only) replaced by `src/lib/identity.ts`.
+
+### Fixed (found while testing 0.4)
+- Home re-rendered the whole page when "my trips" arrived — on slow prod it wiped a group name being typed.
+  Now only the list card is swapped.
+- E2E: view-link test reopened the link before the revoke had saved; onboarding test needs a fresh identity
+  (home is never empty for a shared test identity) and runs locally only.
+- `scripts/test-local.sh` takes `PORT=…` (default 8787) when that port is taken.
+
+### Tests
+- New: integration `membership.test.ts` (the ABC/CDE scenario, every route gated, claim, links, move/merge),
+  unit `identity.test.ts`, system `v4-membership.test.ts` (runs on prod), security `v4-security.test.ts`
+  (outsider 403s, merge/move pulls, forged JWT, spoofed header on prod), E2E `v4.spec.ts` (second browser user).
+- Older tests that used a second identity now link it first; local counts: unit 153, integration 168, system 32, security 110 (+2 prod-only), E2E 48×4 (192). Prod: system 32, security 108 (+4 local-only), E2E 92 (+4 local-only).
+
 ## 0.3.1 — 2026-10-27 (code review; deployed, version 80b4a21f)
 
 Full review of the code base + cross-check of every .md against the code (routes, tables, scripts, conventions).

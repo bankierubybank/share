@@ -7,6 +7,8 @@ Live: https://share.bankierubybank.workers.dev (behind Cloudflare Access).
 
 ## Features
 
+- **Trips are private**: only people in a trip (their Cloudflare Access email added under People) can open it;
+  home lists "My trips" from the server. Pre-0.4 trips: the first visitor picks who they are.
 - **Groups**: create, share the link, archive (read-only) or delete; merge two groups; read-only view links (`/v/<id>`).
 - **Bills**: split equally, by exact amounts, by shares, by percent, or itemized (service charge + VAT);
   several payers; foreign currency with a rate; categories; receipt photos; comments; repeating weekly / monthly;
@@ -23,7 +25,7 @@ Live: https://share.bankierubybank.workers.dev (behind Cloudflare Access).
 ```bash
 npm install
 npm run db:migrate:local
-npm run dev            # http://localhost:8787
+npm run dev            # http://localhost:8787 (DEV_IDENTITY=1: you are dev@example.com)
 ```
 
 ## Test

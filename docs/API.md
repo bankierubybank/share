@@ -1,4 +1,4 @@
-# API Contract (v2 — app 0.2.0)
+# API Contract (v4 — app 0.4.0)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 
@@ -9,10 +9,11 @@ Errors: `{ "error": { "code": string, "message": string } }`.
 | Status | code |
 |--------|------|
 | 400 | `bad_request` / `validation` |
-| 401 | `unauthorized` (Access JWT required/invalid, only when Access check enabled) |
+| 401 | `unauthorized` (no valid Access identity) |
+| 403 | `not_member` (you're not linked to anyone in this trip) / `claim_required` (pre-0.4 trip, nobody linked yet) |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) |
+| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
 
@@ -20,7 +21,9 @@ Errors: `{ "error": { "code": string, "message": string } }`.
 
 ```ts
 Group   = { id; name; currency; archived: boolean; createdAt }
-Member  = { id; name; promptpay: string | null }        // normalized PromptPay id (10/13/15 digits)
+Member  = { id; name; promptpay: string | null;        // normalized PromptPay id (10/13/15 digits)
+            email: string | null }                      // linked identity: who may open the trip as this person
+MyGroup = Group & { memberId; memberName }              // a trip I'm linked to
 Share   = { memberId: string; amount: number }
 Category = 'food'|'groceries'|'lodging'|'transport'|'activities'|'shopping'|'utilities'|'other'
 Split   = { mode: 'equal';    members: string[] }                         // remainder → first in order
@@ -54,19 +57,41 @@ Recurrence = { id; frequency: 'weekly'|'monthly'; nextDate; active; lastError: s
 - Payment: single payer, `split = { mode:'equal', members:[receiver] }`, receiver ≠ payer.
 - `shares`/`payers` returned in member display order.
 
+## Membership (v4 — app 0.4.0)
+
+A trip is visible **only to identities linked to one of its people** (`members.email`, unique per trip).
+Identity = the email in the verified Cloudflare Access JWT, or `svc:<client id>` for a service token
+(shown as `"service token"`; locally `DEV_IDENTITY=1` reads the `Cf-Access-Authenticated-User-Email` header instead,
+default `dev@example.com`). The group id is still unguessable, but no longer enough on its own.
+
+- Every `/api/groups/:gid/**` route: no identity → `401`; not linked → `403 not_member` (nothing about the trip
+  in the body); trip with nobody linked (created before 0.4) → `403 { error: { code: "claim_required", members: [{ id, name }] } }`
+  until someone says who they are with `POST …/me` (only names are revealed before that; then the trip is locked).
+- Creating a trip links the creator to `members[me]` (default 0).
+- Any member may set/clear other people's `email`. The trip's **last** link can't be cleared or deleted (`409 last_link`).
+- Move/merge: the other trip must also have you linked, else `404` (indistinguishable from "doesn't exist").
+  People added by a move/merge get **no** email (a move must not grant access to the whole target trip).
+- Read-only view links (`/api/view/:viewId`) stay an explicit, opt-in way to show a trip to non-members; no emails in them.
+- Activity: `member.email` (`{ name, set }`, never the address), `member.link` (`{ name }`).
+
+| Method | Path | Body | 2xx |
+|--------|------|------|-----|
+| GET | `/api/me/groups` | – | `{ groups: MyGroup[] }` newest first, ≤200 |
+| POST | `/api/groups/:gid/me` | `{ memberId }` | `{ me }` — claim an unclaimed trip, or move my link to that (unlinked) person; 409 if linked to someone else (allowed while archived) |
+
 ## Endpoints
 
 | Method | Path | Body | 2xx |
 |--------|------|------|-----|
 | GET | `/api/health` | – | `{ ok, version }` |
 | GET | `/api/me` | – | `{ actor: string \| null }` (Access email, `"service token"`, or null) |
-| POST | `/api/groups` | `{ name, currency, members: string[] }` | `201 { group, members }` |
-| GET | `/api/groups/:gid` | – | `{ group, members, bills }` (live bills, newest first; materializes due recurring bills) |
+| POST | `/api/groups` | `{ name, currency, members: string[], me?: index }` | `201 { group, members, me }` (creator linked to `members[me]`) |
+| GET | `/api/groups/:gid` | – | `{ group, members, bills, me }` (`me` = my member id; live bills, newest first; materializes due recurring bills) |
 | PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
 | DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
-| POST | `/api/groups/:gid/members` | `{ name, promptpay? }` | `201 { member }` |
-| PATCH | `/api/groups/:gid/members/:mid` | `{ name?, promptpay?: string \| null }` | `{ member }` |
-| DELETE | `/api/groups/:gid/members/:mid` | – | `204`; 409 if on a live bill or active recurring bill |
+| POST | `/api/groups/:gid/members` | `{ name, promptpay?, email? }` | `201 { member }` |
+| PATCH | `/api/groups/:gid/members/:mid` | `{ name?, promptpay?: string \| null, email?: string \| null }` | `{ member }`; email lowercased, unique per trip (409); 409 `last_link` |
+| DELETE | `/api/groups/:gid/members/:mid` | – | `204`; 409 if on a live bill or active recurring bill, or `last_link` |
 | POST | `/api/groups/:gid/bills` | Bill body | `201 { bill }` |
 | PUT | `/api/groups/:gid/bills/:bid` | Bill body | `{ bill }` |
 | DELETE | `/api/groups/:gid/bills/:bid` | – | `204` **soft delete** (purged after 30 days) |
@@ -100,7 +125,7 @@ Bill.commentCount: number
 | GET | `/api/groups/:gid/view-link` | – | `{ viewId: string \| null }` |
 | POST | `/api/groups/:gid/view-link` | `{}` | `201 { viewId }` — creates or **rotates** (old link stops working) |
 | DELETE | `/api/groups/:gid/view-link` | – | `204` revoke (allowed even when archived) |
-| GET | `/api/view/:viewId` | – | `{ group (no id), members (no promptpay), bills (no createdBy/receipt/recurrence), summary, readOnly: true }` |
+| GET | `/api/view/:viewId` | – | `{ group (no id), members (no promptpay/email), bills (no createdBy/receipt/recurrence), summary, readOnly: true }` |
 | POST | `/api/groups/:gid/bills/:bid/move` | `{ targetGroupId, addMissingMembers?: boolean }` | `{ bill, targetGroupId, addedMembers }` |
 | POST | `/api/groups/:gid/merge` | `{ sourceGroupId, addMissingMembers?: boolean }` | `{ moved, addedMembers, sourceArchived: true }` |
 
@@ -114,7 +139,7 @@ Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|m
 
 **Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
-Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|rename|promptpay|remove`,
+Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|rename|promptpay|email|link|remove`,
 `bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`.
 
 ## Scheduled (daily 00:17 UTC)

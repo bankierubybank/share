@@ -102,18 +102,15 @@ describe("health and identity", () => {
     expect(r.json).toEqual({ ok: true, version: VERSION });
   });
 
-  it("/api/me: null without headers, email (lowercased) from header, service token and JWT email from assertion", async () => {
-    expect((await call("GET", "/api/me")).json).toEqual({ actor: null });
+  it("/api/me (dev identity): default without header, email (lowercased) from header, null for junk; unverified JWTs ignored", async () => {
+    expect((await call("GET", "/api/me")).json).toEqual({ actor: "dev@example.com" });
     expect((await call("GET", "/api/me", undefined, { "Cf-Access-Authenticated-User-Email": "Alice@Example.COM" })).json).toEqual({
       actor: "alice@example.com",
     });
+    expect((await call("GET", "/api/me", undefined, { "Cf-Access-Authenticated-User-Email": "<b>x</b>" })).json).toEqual({ actor: null });
     const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const jwt = (payload: unknown) => `${b64({ alg: "none" })}.${b64(payload)}.sig`;
-    expect((await call("GET", "/api/me", undefined, { "Cf-Access-Jwt-Assertion": jwt({ email: "Bob@X.io" }) })).json).toEqual({ actor: "bob@x.io" });
-    expect((await call("GET", "/api/me", undefined, { "Cf-Access-Jwt-Assertion": jwt({ common_name: "abc.access" }) })).json).toEqual({
-      actor: "service token",
-    });
-    expect((await call("GET", "/api/me", undefined, { "Cf-Access-Jwt-Assertion": "garbage" })).json).toEqual({ actor: null });
+    expect((await call("GET", "/api/me", undefined, { "Cf-Access-Jwt-Assertion": jwt({ email: "Bob@X.io" }) })).json).toEqual({ actor: "dev@example.com" });
   });
 });
 
@@ -295,7 +292,7 @@ describe("members: PromptPay", () => {
     expect(json.members.filter((m: any) => m.promptpay)).toHaveLength(cases.length);
     const mid = json.members.find((m: any) => m.name === "Alice").id;
     const p = await call("PATCH", `/api/groups/${gid}/members/${mid}`, { promptpay: "0899999999" });
-    expect(p.json.member).toEqual({ id: mid, name: "Alice", promptpay: "0899999999" });
+    expect(p.json.member).toEqual({ id: mid, name: "Alice", promptpay: "0899999999", email: "dev@example.com" }); // Alice = creator
   });
 
   it("clears with null or empty string; omitting leaves it alone", async () => {
@@ -434,6 +431,8 @@ describe("activity log", () => {
     const gid = created.json.group.id as string;
     const [A, B] = created.json.members.map((m: any) => m.id);
     const g = (m: string, p: string, b?: unknown) => call(m, `/api/groups/${gid}${p}`, b, who);
+    // Header-less calls below (receipt upload, activity reads) act as the default dev identity: link it as B.
+    await g("PATCH", `/members/${B}`, { email: "dev@example.com" });
 
     await g("PATCH", "", { name: "Log2", currency: "EUR" });
     const extra = (await g("POST", "/members", { name: "C" })).json.member.id;
@@ -462,9 +461,9 @@ describe("activity log", () => {
       "receipt.add", "receipt.remove", "recurring.create", "recurring.stop",
     ])
       expect(actions.has(a), a).toBe(true);
-    // actor comes from the header on every entry (the receipt upload went without a header, so null)
+    // actor comes from the header on every entry (the receipt upload went without a header: default dev identity)
     for (const a of acts) {
-      if (a.action === "receipt.add") expect(a.actor).toBeNull();
+      if (a.action === "receipt.add") expect(a.actor).toBe("dev@example.com");
       else if (a.action === "bill.recurring") expect(a.actor).toBe("recurring"); // system actor for materialized bills
       else expect(a.actor, a.action).toBe("ann@corp.example");
     }
@@ -488,11 +487,11 @@ describe("activity log", () => {
     }
   });
 
-  it("actor is null without headers; bill.createdBy null", async () => {
+  it("without headers the actor is the default dev identity (DEV_IDENTITY=1); bill.createdBy too", async () => {
     const { gid, ids } = await makeGroup();
     const bid = await simpleBill(gid, ids);
-    for (const a of await activity(gid)) expect(a.actor).toBeNull();
-    expect((await call("GET", `/api/groups/${gid}`)).json.bills.find((b: any) => b.id === bid).createdBy).toBeNull();
+    for (const a of await activity(gid)) expect(a.actor).toBe("dev@example.com");
+    expect((await call("GET", `/api/groups/${gid}`)).json.bills.find((b: any) => b.id === bid).createdBy).toBe("dev@example.com");
   });
 
   it("limit is clamped to 1..100 and junk falls back to 50; before filters strictly older", async () => {

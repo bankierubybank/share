@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PORT=8787
+PORT=${PORT:-8787}  # override if 8787 is taken
 export TARGET_URL="http://localhost:$PORT"
 # Firefox excluded by default: Playwright's Firefox fails to launch on this macOS (see docs/ISSUES.md #1).
 COMPAT_PROJECTS=${COMPAT_PROJECTS:-"chromium webkit mobile-chrome mobile-safari"}
@@ -19,7 +19,8 @@ step "migrate local D1"; npx wrangler d1 migrations apply share-db --local >/dev
 STARTED=""
 if ! curl -sf "$TARGET_URL/api/health" >/dev/null; then
   step "start wrangler dev"
-  npx wrangler dev --port "$PORT" >.wrangler-dev.log 2>&1 &
+  # DEV_IDENTITY=1: identity from the Cf-Access-Authenticated-User-Email header (tests act as several people).
+  npx wrangler dev --port "$PORT" --var DEV_IDENTITY:1 >.wrangler-dev.log 2>&1 &
   STARTED=$!
   trap '[ -n "$STARTED" ] && kill $STARTED 2>/dev/null || true' EXIT
   for _ in $(seq 1 60); do curl -sf "$TARGET_URL/api/health" >/dev/null && break; sleep 1; done

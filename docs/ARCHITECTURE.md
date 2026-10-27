@@ -7,7 +7,7 @@ Browser (SPA, Material Web M3)
 Cloudflare Access  (configured manually by owner; service token for automated tests)
    ▼
 Worker "share"  (src/index.ts, Hono)          run_worker_first = true
-   ├── middleware: security headers, Access JWT verify (optional), body limit, content-type
+   ├── middleware: security headers, identity (Access JWT verify → email / svc:<id>), body limit, content-type
    ├── /api/*  → routes (src/routes.ts) → D1 (binding DB, database "share-db")
    │                                     → R2 RECEIPTS ("share-receipts": receipt photos)
    ├── else    → env.ASSETS (dist/, Vite build of web/) with SPA fallback
@@ -49,7 +49,8 @@ Worker "share"  (src/index.ts, Hono)          run_worker_first = true
 ## Data model (D1 / SQLite)
 
 - `groups(id PK, name, currency, archived_at, created_at)`
-- `members(id PK, group_id FK, name, promptpay, position, created_at)` unique `(group_id, lower(name))`
+- `members(id PK, group_id FK, name, promptpay, email, position, created_at)` unique `(group_id, lower(name))`,
+  unique `(group_id, email)` where set; index on `email` (my trips). `email` = linked identity (0004).
 - `bills(id PK, group_id FK, kind, description, amount, paid_by FK (first payer), date, split_mode, split_json,
   category, original_currency, original_amount, fx_rate, receipt_key, recurrence_id, created_by, deleted_at, created_at, updated_at)`
 - `bill_shares(bill_id FK, member_id FK, amount)` PK `(bill_id, member_id)` — who owes what (resolved cents)
@@ -74,10 +75,16 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 
 ## Security model
 
-- Authentication/authorization: **Cloudflare Access** in front of the whole hostname. Inside the app,
-  possession of the group link (128-bit random id) = access to that group (KittySplit model).
-- Defense in depth: if `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` vars are set, Worker verifies
-  `Cf-Access-Jwt-Assertion` (RS256 via team JWKS) on every request → 401 otherwise.
+- Authentication: **Cloudflare Access** in front of the whole hostname, and the Worker verifies
+  `Cf-Access-Jwt-Assertion` (RS256 via team JWKS; `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` in `wrangler.jsonc`) on every
+  request → 401 otherwise. Identity = JWT `email`, or `svc:<common_name>` for service tokens (`src/lib/identity.ts`).
+  Headers like `Cf-Access-Authenticated-User-Email` are **never** trusted on prod; only with `DEV_IDENTITY=1`
+  (local `wrangler dev --var`, integration config). Neither configured → identity null → trip routes 401 (fail closed).
+- Authorization (v0.4): a trip is visible only to identities linked to one of its people (`members.email`).
+  The group middleware does one query (`getGroupAccess`: group + my member id + "anyone linked?") per request.
+  Pre-0.4 trips (nobody linked) are claimed by their first visitor (`POST …/me`, guarded against a race), after
+  which they're locked too. The 22-char group id stays unguessable, but is no longer sufficient by itself.
+  Move/merge check membership in both trips (404 otherwise). The last link can't be removed (no orphaned trips).
 - Every member/bill lookup is scoped by `group_id` (no cross-group IDOR).
 - Headers: strict CSP (`'self'` only — fonts/icons self-hosted, no third parties), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
   (group ids live in URLs), `X-Content-Type-Options: nosniff`, HSTS, Permissions-Policy.
@@ -88,7 +95,8 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 - Read-only links: `GET /api/view/:viewId` is the only route keyed by the view id; it returns a trimmed snapshot
   without the group id (the edit secret), PromptPay ids, receipts, activity or actors. Rotating issues a new id.
 - Never log another group's id anywhere readable (activity of the target after a merge logs only the name).
-- Activity `actor` comes from Access headers, validated as an email shape; it is display data, not auth.
+- Activity `actor` = the verified identity (service tokens shown as "service token"). Member emails are visible to
+  people in the same trip only — never in view links, and never written into activity details.
 - Frontend renders user text via `textContent` / Lit-free DOM building — no `innerHTML` with data.
 
 ## Decisions
@@ -103,5 +111,6 @@ even with `PRAGMA defer_foreign_keys` — back the children up and restore them 
 - **Shared validation**: the bill dialog imports `src/lib/validate.ts` so its live preview equals the server result.
 - `md-menu` uses `quick` (no animation): its close animation hung (scale(Infinity)) and the menu couldn't reopen.
 - **Integer minor units** everywhere; formatting via `Intl.NumberFormat` per group currency.
-- **No in-app accounts**: Access handles identity; keeps app simple.
+- **No in-app accounts**: Access handles identity; a person in a trip is "linked" by putting their Access email on
+  them (or by them claiming it). No invites/requests flow — someone in the trip adds your email.
 - Worker name `share` → `https://share.bankierubybank.workers.dev` (the `xxx` in the brief).

@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 // Cache JWKS per team domain across requests in the same isolate (keys only, no request state).
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
@@ -12,13 +12,12 @@ function jwks(teamDomain: string) {
   return set;
 }
 
-/** Verifies the Cloudflare Access JWT. Returns true when valid for the configured team + audience. */
-export async function verifyAccessJwt(token: string | null | undefined, teamDomain: string, aud: string): Promise<boolean> {
-  if (!token) return false;
+/** Verifies the Cloudflare Access JWT. Returns its claims when valid for the configured team + audience, else null. */
+export async function verifyAccessJwt(token: string | null | undefined, teamDomain: string, aud: string): Promise<JWTPayload | null> {
+  if (!token) return null;
   try {
-    await jwtVerify(token, jwks(teamDomain), { issuer: `https://${teamDomain}`, audience: aud });
-    return true;
+    return (await jwtVerify(token, jwks(teamDomain), { issuer: `https://${teamDomain}`, audience: aud })).payload;
   } catch {
-    return false;
+    return null;
   }
 }

@@ -27,9 +27,11 @@
   // Daily: D1 backup to R2, materialize due recurring bills, purge bills deleted > 30 days ago.
   "triggers": { "crons": ["17 0 * * *"] },
   "vars": {
-    // Set both to enforce Cloudflare Access JWT verification inside the Worker (see docs/ACCESS.md).
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    // Cloudflare Access JWT verification inside the Worker — REQUIRED since v0.4: the verified identity decides
+    // which trips a caller can open (docs/ACCESS.md). Not secrets (AUD tag + team domain are public identifiers).
+    // Local dev / tests run with `--var DEV_IDENTITY:1` instead (header-based identity); never set that here.
+    "ACCESS_TEAM_DOMAIN": "bankierubybank.cloudflareaccess.com",
+    "ACCESS_AUD": "41642e58f024d0c0fa8bdc766ff86e500c26dcc2cdda30dd2faa6e6144ca6e60"
   },
   "observability": { "enabled": true }
 }

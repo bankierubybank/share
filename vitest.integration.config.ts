@@ -8,7 +8,8 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        bindings: { TEST_MIGRATIONS: await readD1Migrations(path.join(__dirname, "migrations")) },
+        // DEV_IDENTITY: identity from the Access email header (default dev@example.com), see src/lib/identity.ts.
+        bindings: { TEST_MIGRATIONS: await readD1Migrations(path.join(__dirname, "migrations")), DEV_IDENTITY: "1" },
       },
     })),
   ],

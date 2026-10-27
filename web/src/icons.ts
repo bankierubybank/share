@@ -33,11 +33,13 @@ import i_image from "@material-symbols/svg-400/outlined/image.svg?raw";
 import i_info from "@material-symbols/svg-400/outlined/info.svg?raw";
 import i_light_mode from "@material-symbols/svg-400/outlined/light_mode.svg?raw";
 import i_local_activity from "@material-symbols/svg-400/outlined/local_activity.svg?raw";
+import i_lock from "@material-symbols/svg-400/outlined/lock.svg?raw";
 import i_more_vert from "@material-symbols/svg-400/outlined/more_vert.svg?raw";
 import i_payments from "@material-symbols/svg-400/outlined/payments.svg?raw";
 import i_percent from "@material-symbols/svg-400/outlined/percent.svg?raw";
 import i_person from "@material-symbols/svg-400/outlined/person.svg?raw";
 import i_person_add from "@material-symbols/svg-400/outlined/person_add.svg?raw";
+import i_person_pin from "@material-symbols/svg-400/outlined/person_pin.svg?raw";
 import i_person_remove from "@material-symbols/svg-400/outlined/person_remove.svg?raw";
 import i_photo_camera from "@material-symbols/svg-400/outlined/photo_camera.svg?raw";
 import i_print from "@material-symbols/svg-400/outlined/print.svg?raw";
@@ -91,11 +93,13 @@ export const ICONS = {
   info: i_info,
   light_mode: i_light_mode,
   local_activity: i_local_activity,
+  lock: i_lock,
   more_vert: i_more_vert,
   payments: i_payments,
   percent: i_percent,
   person: i_person,
   person_add: i_person_add,
+  person_pin: i_person_pin,
   person_remove: i_person_remove,
   photo_camera: i_photo_camera,
   print: i_print,

@@ -119,7 +119,7 @@ describe("comments", () => {
       id: expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
       billId: bid,
       authorMemberId: ids.Alice,
-      actor: null,
+      actor: "dev@example.com",
       body: "first",
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
     });
@@ -138,6 +138,7 @@ describe("comments", () => {
   it("records the Access actor (lowercased) on the comment and in activity; excerpt is capped at 80 chars", async () => {
     const { gid, ids } = await makeGroup();
     const bid = await simpleBill(gid, ids, { description: "Dinner" });
+    await call("PATCH", `/api/groups/${gid}/members/${ids.Bob}`, { email: "zed@example.com" }); // Zed may open the trip
     const long = "z".repeat(300);
     const r = await call("POST", cPath(gid, bid), { body: long }, { "Cf-Access-Authenticated-User-Email": "Zed@Example.COM" });
     expect(r.status).toBe(201);
@@ -467,6 +468,7 @@ describe("read-only view links", () => {
   it("the shared snapshot hides group id, promptpay, createdBy, hasReceipt, recurrenceId; summary matches; readOnly", async () => {
     const { gid, ids } = await makeGroup(["Alice", "Bob", "Carol"], "USD", "Hidden Trip");
     const who = { "Cf-Access-Authenticated-User-Email": "creator@example.com" };
+    await call("PATCH", `/api/groups/${gid}/members/${ids.Bob}`, { email: "creator@example.com" });
     await call("PATCH", `/api/groups/${gid}/members/${ids.Alice}`, { promptpay: "0812345678" });
     const bid = (await call("POST", `/api/groups/${gid}/bills`, {
       description: "Dinner", date: DATE, amount: 900, paidBy: ids.Alice, split: equal([ids.Alice, ids.Bob, ids.Carol]),
@@ -818,6 +820,7 @@ describe("move a bill to another group", () => {
     const B = await makeGroup(["Alice", "Bob", "Carol"], "USD", "To Trip");
     const bid = await simpleBill(A.gid, A.ids, { description: "Taxi", amount: 1234 });
     const who = { "Cf-Access-Authenticated-User-Email": "mover@example.com" };
+    for (const g of [A, B]) await call("PATCH", `/api/groups/${g.gid}/members/${g.ids.Bob}`, { email: "mover@example.com" }); // in both trips
     expect((await call("POST", mvPath(A.gid, bid), { targetGroupId: B.gid }, who)).status).toBe(200);
     const out = (await activity(A.gid)).find((a) => a.action === "bill.moveOut")!;
     const inn = (await activity(B.gid)).find((a) => a.action === "bill.moveIn")!;

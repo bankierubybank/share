@@ -6,17 +6,19 @@ import { ENTITY_ID_RE, GROUP_ID_RE, randomId } from "./lib/ids";
 import {
   LIMITS, ValidationError, nextOccurrence, parseBill, parseGroupPatch, parseMember, parseNewGroup, parseRecurrence,
 } from "./lib/validate";
-import { actorOf } from "./lib/actor";
+import { actorLabel } from "./lib/identity";
 import { runBackup } from "./backup";
 import { readLimited } from "./lib/body";
 import { registerSocial } from "./routes-social";
 import { stripMemberFromSubgroups } from "./db-social";
 
-export type AppEnv = { Bindings: Env };
-type GroupEnv = AppEnv & { Variables: { group: db.Group } };
+/** `identity`: verified caller (src/lib/identity.ts), set by src/index.ts; null = unknown → 401 on trip routes. */
+export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
+/** `me`: the caller's member id in the group (null only while claiming an unclaimed trip). */
+export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.3.1";
+export const VERSION = "0.4.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -99,40 +101,75 @@ export const api = new Hono<AppEnv>();
 
 api.get("/health", (c) => c.json({ ok: true, version: VERSION }));
 
-api.get("/me", (c) => c.json({ actor: actorOf(c.req.raw) }));
+const noIdentity = (c: Context) => apiError(c, 401, "unauthorized", "sign in through Cloudflare Access");
 
-api.post("/groups", async (c) => {
-  const input = parseNewGroup(await readJson(c));
-  const out = await db.createGroup(c.env.DB, input.name, input.currency, input.members, actorOf(c.req.raw));
-  return c.json(out, 201);
+api.get("/me", (c) => c.json({ actor: actorLabel(c.get("identity")) }));
+
+/** Trips the caller is linked to (home page). */
+api.get("/me/groups", async (c) => {
+  const identity = c.get("identity");
+  if (!identity) return noIdentity(c);
+  return c.json({ groups: await db.groupsFor(c.env.DB, identity) });
 });
 
-// Group-scoped routes: validate id format + existence once; archived groups are read-only.
+api.post("/groups", async (c) => {
+  const identity = c.get("identity");
+  if (!identity) return noIdentity(c);
+  const input = parseNewGroup(await readJson(c));
+  const out = await db.createGroup(c.env.DB, input.name, input.currency, input.members, input.me, identity, actorLabel(identity));
+  return c.json({ ...out, me: out.members[input.me].id }, 201);
+});
+
+// Group-scoped routes: validate id format + existence once; only linked people get in; archived = read-only.
 const g = new Hono<GroupEnv>();
 
 g.use("*", async (c, next) => {
   const gid = c.req.param("gid") ?? "";
   if (!GROUP_ID_RE.test(gid)) return apiError(c, 404, "not_found", "group not found");
-  const group = await db.getGroup(c.env.DB, gid);
-  if (!group) return apiError(c, 404, "not_found", "group not found");
+  const identity = c.get("identity");
+  if (!identity) return noIdentity(c);
+  const access = await db.getGroupAccess(c.env.DB, gid, identity);
+  if (!access) return apiError(c, 404, "not_found", "group not found");
+  const { group, meId, claimed } = access;
   const m = c.req.method;
+  const isClaim = m === "POST" && /\/me\/?$/.test(c.req.path);
+  // Pre-0.4 trips have nobody linked: the first visitor says who they are (POST /me), which locks the trip.
+  // Until then only the names are returned, to pick from.
+  if (!meId && !(isClaim && !claimed)) {
+    if (claimed) return apiError(c, 403, "not_member", `${actorLabel(identity)} is not in this trip; ask someone in it to add your email under People`);
+    const members = (await db.listMembers(c.env.DB, gid)).map(({ id, name }) => ({ id, name }));
+    return c.json({ error: { code: "claim_required", message: "nobody is linked to this trip yet; pick who you are", members } }, 403);
+  }
   const isRoot = /\/groups\/[^/]+\/?$/.test(c.req.path);
-  // Revoking a read-only link must always be possible, even while archived.
+  // Revoking a read-only link (and saying who you are) must always be possible, even while archived.
   const isRevoke = m === "DELETE" && /\/view-link\/?$/.test(c.req.path);
-  if (group.archived && m !== "GET" && m !== "HEAD" && !isRevoke && !(isRoot && (m === "PATCH" || m === "DELETE")))
+  if (group.archived && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !(isRoot && (m === "PATCH" || m === "DELETE")))
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
   c.set("group", group);
+  c.set("me", meId);
   await next();
 });
 
-const actor = (c: GCtx) => actorOf(c.req.raw);
+const actor = (c: GCtx) => actorLabel(c.get("identity"));
 const gidOf = (c: GCtx) => c.get("group").id;
 
 g.get("/", async (c) => {
   const group = c.get("group");
   if (!group.archived) await materializeDue(c.env, group.id);
   const [members, bills] = await Promise.all([db.listMembers(c.env.DB, group.id), db.listBills(c.env.DB, group.id)]);
-  return c.json({ group, members, bills });
+  return c.json({ group, members, bills, me: c.get("me") });
+});
+
+/** "This is me": claim an unclaimed trip, or move my link to another (unlinked) person. */
+g.post("/me", async (c) => {
+  const body = await readJson(c);
+  const mid = typeof body === "object" && body !== null ? (body as { memberId?: unknown }).memberId : undefined;
+  if (typeof mid !== "string" || !ENTITY_ID_RE.test(mid)) return apiError(c, 400, "validation", "memberId is required");
+  const r = await db.linkMe(c.env.DB, gidOf(c), mid, c.get("identity")!, c.get("me"), actor(c));
+  if (r === "not_found") return apiError(c, 404, "not_found", "member not found");
+  if (r === "taken") return apiError(c, 409, "conflict", "that person is linked to someone else");
+  if (r === "race") return apiError(c, 409, "conflict", "someone else just claimed this trip; reload");
+  return c.json({ me: mid });
 });
 
 g.patch("/", async (c) => {
@@ -151,15 +188,27 @@ g.delete("/", async (c) => {
 
 // ---------- members ----------
 
+const memberConflict = (c: GCtx, e: unknown) =>
+  /email/i.test(String(e))
+    ? apiError(c, 409, "conflict", "that email is already linked to someone in this trip")
+    : apiError(c, 409, "conflict", "a member with that name already exists");
+const lastLink = (c: GCtx) => apiError(c, 409, "last_link", "at least one person must keep an email, or nobody could open this trip");
+
+/** True if `mid` holds the trip's only link (removing it would lock everyone out). */
+async function wouldUnlinkLast(c: GCtx, mid: string) {
+  const m = await db.getMember(c.env.DB, gidOf(c), mid);
+  return !!m?.email && (await db.linkedCount(c.env.DB, gidOf(c))) <= 1;
+}
+
 g.post("/members", async (c) => {
   const input = parseMember(await readJson(c), true);
   const gid = gidOf(c);
   if ((await db.countRows(c.env.DB, "members", gid)) >= LIMITS.membersPerGroup)
     return apiError(c, 409, "conflict", `at most ${LIMITS.membersPerGroup} members per group`);
   try {
-    return c.json({ member: await db.addMember(c.env.DB, gid, input.name!, input.promptpay ?? null, actor(c)) }, 201);
+    return c.json({ member: await db.addMember(c.env.DB, gid, input.name!, input.promptpay ?? null, input.email ?? null, actor(c)) }, 201);
   } catch (e) {
-    if (isUnique(e)) return apiError(c, 409, "conflict", "a member with that name already exists");
+    if (isUnique(e)) return memberConflict(c, e);
     throw e;
   }
 });
@@ -168,12 +217,13 @@ g.patch("/members/:mid", async (c) => {
   const mid = c.req.param("mid");
   if (!ENTITY_ID_RE.test(mid)) return apiError(c, 404, "not_found", "member not found");
   const patch = parseMember(await readJson(c), false);
+  if (patch.email === null && (await wouldUnlinkLast(c, mid))) return lastLink(c);
   try {
     const member = await db.updateMember(c.env.DB, gidOf(c), mid, patch, actor(c));
     if (!member) return apiError(c, 404, "not_found", "member not found");
     return c.json({ member });
   } catch (e) {
-    if (isUnique(e)) return apiError(c, 409, "conflict", "a member with that name already exists");
+    if (isUnique(e)) return memberConflict(c, e);
     throw e;
   }
 });
@@ -184,6 +234,7 @@ g.delete("/members/:mid", async (c) => {
   if (!ENTITY_ID_RE.test(mid)) return apiError(c, 404, "not_found", "member not found");
   if (await db.memberInUse(c.env.DB, gid, mid))
     return apiError(c, 409, "conflict", "member is used by bills or recurring bills; change those first");
+  if (await wouldUnlinkLast(c, mid)) return lastLink(c);
   const r = await db.deleteMember(c.env.DB, gid, mid, actor(c));
   if (!r.ok) return apiError(c, 404, "not_found", "member not found");
   await stripMemberFromSubgroups(c.env.DB, gid, mid);

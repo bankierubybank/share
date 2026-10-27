@@ -1,5 +1,5 @@
 // Pick another group (recent list or pasted link) for moving a bill or merging groups (#10).
-import { ApiError, parseGroupRef } from "../api";
+import { api, ApiError, parseGroupRef } from "../api";
 import { h, icon } from "../dom";
 import { t } from "../i18n";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
@@ -10,7 +10,9 @@ type Field = HTMLElement & { value: string; error: boolean; errorText: string };
 /** Resolves with the chosen group id, or null if cancelled. */
 export async function pickGroupDialog(title: string, help: string, excludeId: string, currency: string): Promise<string | null> {
   let chosen: string | null = null;
-  const others = recentGroups().filter((g) => g.id !== excludeId && !g.archived);
+  // Only trips I'm linked to can be a target/source (the server checks too).
+  const mine = await api.myGroups().then((r) => r.groups, () => recentGroups());
+  const others = mine.filter((g) => g.id !== excludeId && !g.archived);
   const paste = h("md-outlined-text-field", { label: t("move.pasteLabel"), dataset: { testid: "pick-group-input" } }) as Field;
   const d = h("md-dialog", { dataset: { testid: "pick-group-dialog" } },
     h("div", { slot: "headline" }, title),

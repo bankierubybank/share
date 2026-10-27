@@ -10,7 +10,6 @@ import {
   parseNewGroup,
 } from "../../src/lib/validate";
 import { nextOccurrence, parseMember, parseRecurrence } from "../../src/lib/validate";
-import { actorOf } from "../../src/lib/actor";
 import { ENTITY_ID_RE, GROUP_ID_RE, entityId, groupId } from "../../src/lib/ids";
 
 describe("cleanName", () => {
@@ -48,6 +47,7 @@ describe("parseNewGroup", () => {
     expect(parseNewGroup({ name: "Trip", currency: "EUR", members: ["A", " B "] })).toEqual({
       name: "Trip",
       currency: "EUR",
+      me: 0,
       members: ["A", "B"],
     });
   });
@@ -213,22 +213,5 @@ describe("recurrence", () => {
     expect(() => parseRecurrence({ frequency: "daily", startDate: "2026-11-01", bill }, members, "THB")).toThrow();
     expect(() => parseRecurrence({ frequency: "weekly", startDate: "2026-11-01", bill: { ...bill, paidBy: "z" } }, members, "THB")).toThrow();
     expect(() => parseRecurrence({ frequency: "weekly", startDate: "2026-11-01", bill: { ...bill, kind: "payment", split: { mode: "equal", members: ["b"] } } }, members, "THB")).toThrow();
-  });
-});
-
-describe("actorOf", () => {
-  const req = (h: Record<string, string>) => new Request("https://x/", { headers: h });
-  const jwt = (p: object) => `x.${btoa(JSON.stringify(p)).replace(/=+$/, "")}.y`;
-  it("uses Access email header, lower-cased", () => {
-    expect(actorOf(req({ "Cf-Access-Authenticated-User-Email": "Ann@Example.com" }))).toBe("ann@example.com");
-  });
-  it("falls back to JWT email, then service token", () => {
-    expect(actorOf(req({ "Cf-Access-Jwt-Assertion": jwt({ email: "b@x.io" }) }))).toBe("b@x.io");
-    expect(actorOf(req({ "Cf-Access-Jwt-Assertion": jwt({ common_name: "abc.access" }) }))).toBe("service token");
-  });
-  it("null when nothing / garbage", () => {
-    expect(actorOf(req({}))).toBeNull();
-    expect(actorOf(req({ "Cf-Access-Jwt-Assertion": "not-a-jwt" }))).toBeNull();
-    expect(actorOf(req({ "Cf-Access-Authenticated-User-Email": "<script>" }))).toBeNull();
   });
 });

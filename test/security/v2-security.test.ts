@@ -486,10 +486,11 @@ describe("archived groups are read-only on every endpoint", () => {
 
 describe("actor header handling", () => {
   const me = async (headers: Record<string, string>) => (await api("GET", "/api/me", undefined, headers)).json.actor as string | null;
-  // Behind Cloudflare Access a service-token run is reported as "service token"; locally no header means null.
-  const inert = (a: string | null) => (a === null ? null : a === "service token" ? a : "<echoed>");
+  // Prod: identity comes from the verified Access JWT ("service token"); locally a junk header gives null.
+  const inert = (a: string | null) => (a === null || a === "service token" || a === "dev@example.com" ? a : "<echoed>");
 
   it("script tags in the email header are not echoed (actor stays null / service token)", async () => {
+    // (v0.4: a bad header means "no identity", so trip routes answer 401 locally — covered in v4-security.)
     for (const v of [
       "<script>alert(1)</script>@evil.io",
       "<img/src=x/onerror=alert(1)>@evil.io",
@@ -518,7 +519,10 @@ describe("actor header handling", () => {
   it("hostile actor values never end up in activity entries or bill.createdBy", async () => {
     const hostile = { "Cf-Access-Authenticated-User-Email": "<script>alert(1)</script>@evil.io" };
     const g = await api("POST", "/api/groups", { name: "Actor", currency: "USD", members: ["A", "B"] }, hostile);
-    expect(g.status).toBe(201);
+    // Locally (header-based dev identity) a hostile header = no identity → 401. On prod the header is ignored.
+    expect([201, 401]).toContain(g.status);
+    expect(g.text).not.toContain("<script>");
+    if (g.status === 401) return;
     const gid = g.json.group.id as string;
     const a = g.json.members[0].id as string;
     const bill = await api("POST", `/api/groups/${gid}/bills`, { description: "x", date: today(), amount: 100, paidBy: a, split: equal([a]) }, hostile);
@@ -531,7 +535,7 @@ describe("actor header handling", () => {
   it("valid emails are accepted, lower-cased and attributed", async () => {
     const actor = await me({ "Cf-Access-Authenticated-User-Email": "Some.One@Example.com" });
     // On prod Access sets its own identity; locally the header is used verbatim.
-    expect(actor === null || actor === "service token" || actor === "some.one@example.com").toBe(true);
+    expect(actor === "service token" || actor === "some.one@example.com").toBe(true);
   });
 });
 

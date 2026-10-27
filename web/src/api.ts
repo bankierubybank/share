@@ -1,7 +1,10 @@
 // Typed client for the Worker API (see docs/API.md).
 
 export interface Group { id: string; name: string; currency: string; archived: boolean; createdAt: string }
-export interface Member { id: string; name: string; promptpay: string | null }
+/** `email`: linked identity — who may open the trip as this person (null = nobody). */
+export interface Member { id: string; name: string; promptpay: string | null; email: string | null }
+/** A trip I'm linked to (home list). */
+export interface MyGroup extends Group { memberId: string; memberName: string }
 export interface Share { memberId: string; amount: number }
 export type BillKind = "expense" | "payment";
 export type Category = "food" | "groceries" | "lodging" | "transport" | "activities" | "shopping" | "utilities" | "other";
@@ -24,7 +27,7 @@ export interface Subgroup { id: string; name: string; memberIds: string[] }
 /** Read-only snapshot from a view link: no group id (the edit secret), trimmed fields. */
 export interface ViewSnapshot {
   group: Omit<Group, "id">;
-  members: Omit<Member, "promptpay">[];
+  members: Omit<Member, "promptpay" | "email">[];
   bills: Omit<Bill, "createdBy" | "hasReceipt" | "recurrenceId">[];
   summary: Summary;
   readOnly: true;
@@ -46,7 +49,11 @@ export interface Recurrence {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string, public missing?: string[]) {
+  constructor(
+    public status: number, public code: string, message: string, public missing?: string[],
+    /** claim_required: the trip's people, to pick who you are. */
+    public members?: { id: string; name: string }[],
+  ) {
     super(message);
   }
 }
@@ -67,7 +74,7 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { body
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const err = data?.error;
-    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.missing);
+    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.missing, err?.members);
   }
   return data as T;
 }
@@ -79,15 +86,19 @@ export const receiptUrl = (gid: string, bid: string, v = "") => `/api${b(gid, bi
 
 export const api = {
   me: () => req<{ actor: string | null }>("GET", "/me"),
-  createGroup: (name: string, currency: string, members: string[]) =>
-    req<{ group: Group; members: Member[] }>("POST", "/groups", { name, currency, members }),
-  getGroup: (gid: string) => req<{ group: Group; members: Member[]; bills: Bill[] }>("GET", g(gid)),
+  myGroups: () => req<{ groups: MyGroup[] }>("GET", "/me/groups"),
+  /** `me` = index of the creator in `members`. */
+  createGroup: (name: string, currency: string, members: string[], me = 0) =>
+    req<{ group: Group; members: Member[]; me: string }>("POST", "/groups", { name, currency, members, me }),
+  getGroup: (gid: string) => req<{ group: Group; members: Member[]; bills: Bill[]; me: string | null }>("GET", g(gid)),
+  /** "This is me": claim an unclaimed trip or move my link to another person. */
+  setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
   updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean }) =>
     req<{ group: Group }>("PATCH", g(gid), patch),
   deleteGroup: (gid: string) => req<void>("DELETE", g(gid)),
-  addMember: (gid: string, name: string, promptpay?: string | null) =>
-    req<{ member: Member }>("POST", `${g(gid)}/members`, { name, ...(promptpay ? { promptpay } : {}) }),
-  updateMember: (gid: string, mid: string, patch: { name?: string; promptpay?: string | null }) =>
+  addMember: (gid: string, name: string, promptpay?: string | null, email?: string | null) =>
+    req<{ member: Member }>("POST", `${g(gid)}/members`, { name, ...(promptpay ? { promptpay } : {}), ...(email ? { email } : {}) }),
+  updateMember: (gid: string, mid: string, patch: { name?: string; promptpay?: string | null; email?: string | null }) =>
     req<{ member: Member }>("PATCH", `${g(gid)}/members/${encodeURIComponent(mid)}`, patch),
   deleteMember: (gid: string, mid: string) => req<void>("DELETE", `${g(gid)}/members/${encodeURIComponent(mid)}`),
   createBill: (gid: string, bill: BillInput) => req<{ bill: Bill }>("POST", `${g(gid)}/bills`, bill),

@@ -4,10 +4,9 @@ import * as db from "./db";
 import * as social from "./db-social";
 import { ENTITY_ID_RE, GROUP_ID_RE } from "./lib/ids";
 import { matchMembersByName, parseComment, parseMove, parseSubgroup, SOCIAL_LIMITS } from "./lib/social";
-import { actorOf } from "./lib/actor";
-import type { AppEnv } from "./routes";
+import { actorLabel } from "./lib/identity";
+import type { AppEnv, GroupEnv } from "./routes";
 
-type GroupEnv = AppEnv & { Variables: { group: db.Group } };
 type GCtx = Context<GroupEnv>;
 
 export interface SocialDeps {
@@ -17,7 +16,12 @@ export interface SocialDeps {
 }
 
 export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError, readJson, summaryOf }: SocialDeps) {
-  const actor = (c: GCtx) => actorOf(c.req.raw);
+  const actor = (c: GCtx) => actorLabel(c.get("identity"));
+  /** The other trip of a move/merge: must exist AND have the caller linked (else it looks like it doesn't exist). */
+  const otherGroup = async (c: GCtx, gid: string) => {
+    const access = await db.getGroupAccess(c.env.DB, gid, c.get("identity")!);
+    return access?.meId ? access.group : null;
+  };
   const gidOf = (c: GCtx) => c.get("group").id;
   const memberIds = async (c: GCtx) => new Set((await db.listMembers(c.env.DB, gidOf(c))).map((m) => m.id));
   const liveBill = async (c: GCtx) => {
@@ -92,7 +96,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     const { id: _secret, ...publicGroup } = group;
     return c.json({
       group: publicGroup,
-      members: members.map(({ promptpay: _pp, ...m }) => m),
+      members: members.map(({ promptpay: _pp, email: _e, ...m }) => m),
       bills: bills.map(({ createdBy: _cb, hasReceipt: _r, recurrenceId: _rid, ...b }) => b),
       summary: summaryOf(members, bills),
       readOnly: true,
@@ -111,7 +115,8 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     if (missing.length && !addMissing)
       return { error: c.json({ error: { code: "missing_members", message: `missing in target: ${missing.map((m) => m.name).join(", ")}`, missing: missing.map((m) => m.name) } }, 409) };
     if (toMembers.length + missing.length > 50) return { error: apiError(c, 409, "conflict", "target would exceed 50 members") };
-    const added = await social.addMembersFor(c.env.DB, to.id, missing, actorOf(c.req.raw));
+    // Added people get no email: moving a bill must not hand someone access to the whole target trip.
+    const added = await social.addMembersFor(c.env.DB, to.id, missing, actor(c));
     for (const [k, v] of added) map.set(k, v);
     return { map, added: missing.map((m) => m.name) };
   }
@@ -121,7 +126,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     const bill = await liveBill(c);
     if (!bill) return apiError(c, 404, "not_found", "bill not found");
     const { groupId, addMissingMembers } = parseMove(await readJson(c), "targetGroupId");
-    const to = await db.getGroup(c.env.DB, groupId);
+    const to = await otherGroup(c, groupId);
     if (!to) return apiError(c, 404, "not_found", "target group not found");
     if (to.archived) return apiError(c, 409, "archived", "target group is archived");
     const r = await prepareMove(c, from, to, [bill], addMissingMembers);
@@ -134,7 +139,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
   g.post("/merge", async (c) => {
     const to = c.get("group");
     const { groupId, addMissingMembers } = parseMove(await readJson(c), "sourceGroupId");
-    const from = await db.getGroup(c.env.DB, groupId);
+    const from = await otherGroup(c, groupId);
     if (!from) return apiError(c, 404, "not_found", "source group not found");
     const bills = await db.listBills(c.env.DB, from.id);
     if ((await db.countRows(c.env.DB, "bills", to.id)) + bills.length > 5000) return apiError(c, 409, "conflict", "would exceed 5000 bills");

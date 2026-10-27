@@ -1,4 +1,4 @@
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type Browser } from "@playwright/test";
 
 // Cloudflare Access service token is attached ONLY to requests for the app's own origin.
 // Never use `extraHTTPHeaders` for it: that sends the secret to every host (e.g. Google Fonts).
@@ -31,5 +31,19 @@ export const test = base.extend({
     }
   },
 });
+
+/**
+ * Local only (wrangler dev --var DEV_IDENTITY:1): a second browser user signed in as `email` — the dev identity
+ * is read from the Cf-Access-Authenticated-User-Email header. Prod ignores that header (identity = Access JWT).
+ */
+export async function contextAs(browser: Browser, baseURL: string, email: string) {
+  const ctx = await browser.newContext({ baseURL });
+  const origin = new URL(baseURL).origin;
+  await ctx.route(
+    (url) => url.protocol.startsWith("http") && url.origin === origin,
+    (route) => route.continue({ headers: { ...route.request().headers(), "cf-access-authenticated-user-email": email } }),
+  );
+  return ctx;
+}
 
 export { expect };

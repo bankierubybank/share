@@ -96,7 +96,7 @@ describe("members", () => {
 
     const ren = await call("PATCH", `/api/groups/${gid}/members/${mid}`, { name: "David" });
     expect(ren.status).toBe(200);
-    expect(ren.json.member).toEqual({ id: mid, name: "David", promptpay: null });
+    expect(ren.json.member).toEqual({ id: mid, name: "David", promptpay: null, email: null });
 
     expect((await call("DELETE", `/api/groups/${gid}/members/${mid}`)).status).toBe(204);
     const g = await call("GET", `/api/groups/${gid}`);
@@ -126,7 +126,9 @@ describe("members", () => {
     expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Bob}`)).status).toBe(409);
     expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Carol}`)).status).toBe(204);
     await call("DELETE", `/api/groups/${gid}/bills/${bill.json.bill.id}`);
-    expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Alice}`)).status).toBe(204);
+    expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Bob}`)).status).toBe(204);
+    // Alice is free now too, but she's the trip's only linked person (the creator).
+    expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Alice}`)).json.error.code).toBe("last_link");
   });
 
   it("404 for unknown or malformed member id", async () => {

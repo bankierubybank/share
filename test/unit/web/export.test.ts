@@ -4,8 +4,8 @@ import { billsToCsv, safeFilename } from "../../../web/src/export";
 
 const group: Group = { id: "g", name: "Trip", currency: "THB", archived: false, createdAt: "2026-01-01" };
 const members: Member[] = [
-  { id: "a", name: "Ann", promptpay: null },
-  { id: "b", name: "Ben", promptpay: null },
+  { id: "a", name: "Ann", promptpay: null, email: null },
+  { id: "b", name: "Ben", promptpay: null, email: null },
 ];
 const bill = (over: Record<string, unknown> = {}): Bill => ({
   id: "1", kind: "expense", description: "Dinner", amount: 15000, paidBy: "a", payers: [{ memberId: "a", amount: 15000 }],
@@ -52,8 +52,8 @@ describe("billsToCsv", () => {
 
   it("prefixes formula-like user text", () => {
     const out = csv([bill({ description: '=HYPERLINK("http://x","y")' })], summary, [
-      { id: "a", name: "+cmd", promptpay: null },
-      { id: "b", name: "Ben", promptpay: null },
+      { id: "a", name: "+cmd", promptpay: null, email: null },
+      { id: "b", name: "Ben", promptpay: null, email: null },
     ]);
     expect(out).toContain(`"'=HYPERLINK(""http://x"",""y"")"`);
     expect(out).toContain(",'+cmd,Ben");

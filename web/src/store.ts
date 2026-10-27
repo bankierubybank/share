@@ -1,4 +1,5 @@
-// Per-browser list of recently opened groups (convenience only; server is source of truth).
+// Per-browser list of recently opened groups: paints home instantly and keeps pre-0.4 (unclaimed) trips findable.
+// The server's "my trips" (/api/me/groups) is the source of truth.
 
 const KEY = "share.recentGroups";
 export interface RecentGroup { id: string; name: string; currency: string; archived?: boolean; openedAt: number }

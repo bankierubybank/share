@@ -39,6 +39,8 @@ interface State {
   recurring: Recurrence[];
   activity: Activity[];
   subgroups: Subgroup[];
+  /** My member id (linked identity); null in view mode. */
+  me: string | null;
 }
 
 /** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
@@ -65,9 +67,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         statsMod = sm;
         state = {
           group: { ...v.group, id: "" },
-          members: v.members.map((m) => ({ ...m, promptpay: null })),
+          members: v.members.map((m) => ({ ...m, promptpay: null, email: null })),
           bills: v.bills.map((b) => ({ ...b, createdBy: null, hasReceipt: false, recurrenceId: null })),
-          summary: v.summary, recurring: [], activity: [], subgroups: [],
+          summary: v.summary, recurring: [], activity: [], subgroups: [], me: null,
         };
       } else {
         const [g, summary, rec, act, subs, sm] = await Promise.all([
@@ -80,7 +82,13 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       if (viewAs && !state.members.some((m) => m.id === viewAs)) viewAs = null;
       return true;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      if (!stillHere()) return false;
+      if (!isView && err instanceof ApiError && err.code === "claim_required" && err.members) {
+        claimView(err.members);
+      } else if (!isView && err instanceof ApiError && err.code === "not_member") {
+        forgetGroup(gid);
+        notMemberView();
+      } else if (err instanceof ApiError && err.status === 404) {
         if (!isView) forgetGroup(gid);
         clear(root, appBar(t("common.notFound")),
           h("main", { class: "page center stack", dataset: { testid: "group-not-found" } },
@@ -96,6 +104,38 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       }
       return false;
     }
+  }
+
+  /** Pre-0.4 trip nobody is linked to yet: pick who you are (that locks the trip to linked people). */
+  function claimView(members: { id: string; name: string }[]) {
+    clear(root, appBar(t("group.claimTitle")),
+      h("main", { class: "page stack", id: "main", dataset: { testid: "claim-view" } },
+        h("h1", { class: "md-typescale-headline-small" }, t("group.claimTitle")),
+        h("p", { class: "md-typescale-body-medium muted" }, t("group.claimText")),
+        h("md-list", { "aria-label": t("group.claimTitle") }, members.map((m) =>
+          h("md-list-item", {
+            type: "button", dataset: { testid: `claim-${m.name}` },
+            onclick: async () => {
+              try {
+                await api.setMe(gid, m.id);
+                renderGroup(root, gid);
+              } catch (e) {
+                snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
+              }
+            },
+          }, h("div", { slot: "start", class: "avatar initial", "aria-hidden": "true" }, initial(m.name)), h("div", { slot: "headline" }, m.name)))),
+        h("md-text-button", { onclick: () => navigate("/") }, t("common.goHome"))));
+  }
+
+  function notMemberView() {
+    const who = h("p", { class: "md-typescale-body-medium muted" });
+    clear(root, appBar(t("group.notMemberTitle")),
+      h("main", { class: "page center stack", id: "main", dataset: { testid: "not-member" } },
+        icon("lock"),
+        h("p", { class: "md-typescale-body-large" }, t("group.notMemberText")),
+        who,
+        h("md-filled-button", { onclick: () => navigate("/") }, t("common.goHome"))));
+    api.me().then(({ actor }) => { if (actor) who.textContent = t("group.signedInAs", { email: actor }); }, () => undefined);
   }
 
   async function refresh() {
@@ -287,27 +327,50 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
 
   async function editMember(m: Member | null) {
     const name = h("md-outlined-text-field", { label: t("common.name"), value: m?.name ?? "", maxLength: 60, required: true, dataset: { testid: "member-name-input" } }) as Field;
+    const isMe = !!m && m.id === state.me;
+    const email = h("md-outlined-text-field", {
+      label: t("member.emailLabel"), value: m?.email?.startsWith("svc:") ? "" : (m?.email ?? ""), type: "email", inputMode: "email",
+      supportingText: isMe ? t("member.emailYou") : t("member.emailHelp"), disabled: isMe || !!m?.email?.startsWith("svc:"),
+      dataset: { testid: "member-email-input" },
+    }) as Field & { disabled: boolean };
     const pp = h("md-outlined-text-field", {
       label: t("member.promptpayLabel"), value: m?.promptpay ?? "", inputMode: "numeric",
       supportingText: t("member.promptpayHelp"),
       dataset: { testid: "member-promptpay-input" },
     }) as Field;
     const save = async () => {
-      name.error = pp.error = false;
+      name.error = pp.error = email.error = false;
+      const mail = email.disabled ? undefined : email.value.trim() || null;
       try {
-        if (m) await api.updateMember(gid, m.id, { name: name.value, promptpay: pp.value.trim() || null });
-        else await api.addMember(gid, name.value, pp.value.trim() || null);
+        if (m) await api.updateMember(gid, m.id, { name: name.value, promptpay: pp.value.trim() || null, ...(mail !== undefined && mail !== m.email ? { email: mail } : {}) });
+        else await api.addMember(gid, name.value, pp.value.trim() || null, mail);
         d.close("ok");
       } catch (e) {
         const msg = e instanceof Error ? e.message : t("common.saveFailed");
-        const f = /promptpay/i.test(msg) ? pp : name;
+        const code = e instanceof ApiError ? e.code : "";
+        const f = /promptpay/i.test(msg) ? pp : code === "last_link" || /email/i.test(msg) ? email : name;
         f.error = true;
-        f.errorText = /promptpay/i.test(msg) ? t("member.promptpayError") : msg;
+        f.errorText = /promptpay/i.test(msg) ? t("member.promptpayError")
+          : code === "last_link" ? t("member.lastLink")
+          : /already linked/i.test(msg) ? t("member.emailTaken")
+          : /email/i.test(msg) ? t("member.emailError") : msg;
       }
     };
+    // "This is me": move my link to this (unlinked) person — e.g. the creator added themselves second.
+    const thisIsMe = m && !isMe && !m.email && state.me !== null && h("md-text-button", {
+      type: "button", dataset: { testid: "member-this-is-me" },
+      onclick: async () => {
+        try {
+          await api.setMe(gid, m.id);
+          d.close("ok");
+        } catch (e) {
+          snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
+        }
+      },
+    }, icon("person_pin", "icon"), t("member.thisIsMe"));
     const d = h("md-dialog", { dataset: { testid: "member-dialog" } },
       h("div", { slot: "headline" }, m ? t("member.edit", { name: m.name }) : t("member.add")),
-      h("form", { slot: "content", class: "stack", onsubmit: (e: Event) => { e.preventDefault(); save(); } }, name, pp),
+      h("form", { slot: "content", class: "stack", onsubmit: (e: Event) => { e.preventDefault(); save(); } }, name, email, pp, thisIsMe),
       h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
         h("md-filled-button", { onclick: save, dataset: { testid: "member-save" } }, t("common.save")))) as MdDialog;
     d.addEventListener("opened", () => name.focus(), { once: true });
@@ -639,7 +702,10 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         state.members.map((m) =>
           h("md-list-item", { dataset: { testid: "member-item" } },
             h("div", { slot: "start", class: "avatar initial", "aria-hidden": "true" }, initial(m.name)),
-            h("div", { slot: "headline" }, m.name),
+            h("div", { slot: "headline" }, m.name, m.id === state.me && h("span", { class: "you-tag", dataset: { testid: "member-you" } }, t("member.you"))),
+            // Emails are only shown inside the trip (never in view links); service-token ids stay hidden.
+            !isView && h("div", { slot: "supporting-text", class: m.email ? "" : "muted", dataset: { testid: "member-email" } },
+              m.email ? (m.email.startsWith("svc:") ? t("member.serviceToken") : m.email) : t("member.noEmail")),
             m.promptpay && h("div", { slot: "supporting-text" }, "PromptPay ✓"),
             !readOnly() && h("div", { slot: "end", class: "row tight" },
               h("md-icon-button", { "aria-label": t("member.edit", { name: m.name }), onclick: () => editMember(m), dataset: { testid: `edit-member-${m.name}` } }, icon("edit")),
@@ -651,7 +717,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
                     await api.deleteMember(gid, m.id);
                     refresh();
                   } catch (e) {
-                    snackbar(e instanceof Error ? e.message : t("member.removeFailed"));
+                    snackbar(e instanceof ApiError && e.code === "last_link" ? t("member.lastLink") : e instanceof Error ? e.message : t("member.removeFailed"));
                   }
                 },
               }, icon("person_remove")))))),
@@ -702,6 +768,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "member.rename": return t("act.memberRename", { from: nm("from"), to: nm("to") });
       case "member.promptpay": return t(d.set ? "act.promptpaySet" : "act.promptpayRemoved", { name: nm("name") });
       case "member.remove": return t("act.memberRemove", { name: nm("name") });
+      case "member.email": return t(d.set ? "act.emailSet" : "act.emailRemoved", { name: nm("name") });
+      case "member.link": return t("act.memberLink", { name: nm("name") });
       case "bill.create": return t(d.kind === "payment" ? "act.paymentCreate" : "act.billCreate", dd);
       case "bill.update": return t("act.billUpdate", dd);
       case "bill.delete": return t("act.billDelete", dd);

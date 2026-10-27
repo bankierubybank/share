@@ -2,6 +2,7 @@ import type { Share } from "./money";
 import { splitEqual } from "./money";
 import { allocate, convertAmount, currencyDigits, RATE_RE, splitItemized } from "./split";
 import { normalizePromptPayId } from "./promptpay-id";
+import { cleanEmail } from "./identity";
 
 export const LIMITS = {
   nameMax: 60,
@@ -75,6 +76,8 @@ export interface NewGroupInput {
   name: string;
   currency: string;
   members: string[];
+  /** Index of the creator in `members` (default 0). */
+  me: number;
 }
 
 export function parseNewGroup(body: unknown): NewGroupInput {
@@ -91,7 +94,12 @@ export function parseNewGroup(body: unknown): NewGroupInput {
     if (seen.has(k)) fail(`duplicate member name: ${m}`);
     seen.add(k);
   }
-  return { name, currency, members };
+  let me = 0;
+  if (body.me !== undefined) {
+    if (!Number.isInteger(body.me) || (body.me as number) < 0 || (body.me as number) >= members.length) fail("me must be the index of one of the members");
+    me = body.me as number;
+  }
+  return { name, currency, members, me };
 }
 
 export interface GroupPatch {
@@ -121,6 +129,8 @@ export function parseMemberName(body: unknown): string {
 export interface MemberInput {
   name?: string;
   promptpay?: string | null;
+  /** Linked identity; null unlinks. */
+  email?: string | null;
 }
 
 /** For POST (name required) and PATCH (any of name / promptpay). */
@@ -129,6 +139,10 @@ export function parseMember(body: unknown, requireName: boolean): MemberInput {
   const out: MemberInput = {};
   if (body.name !== undefined || requireName) out.name = cleanName(body.name);
   if (body.promptpay !== undefined) out.promptpay = cleanPromptPay(body.promptpay);
+  if (body.email !== undefined) {
+    if (body.email === null || body.email === "") out.email = null;
+    else out.email = cleanEmail(typeof body.email === "string" ? body.email.trim() : body.email) ?? fail("email must be a valid email address");
+  }
   if (!Object.keys(out).length) fail("nothing to update");
   return out;
 }

@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { contextAs, expect, test } from "./fixtures";
 import { addEqualBill, createGroup, fill, field, openAddBill, saveBill, showPanel, uniq } from "./helpers";
 
 // v0.3 features (#4, 6, 8, 10, 11, 12, 16, 17, 18).
@@ -153,6 +153,7 @@ test("read-only view link: create, open, revoke (#12)", async ({ page }) => {
   await page.goto(groupUrl);
   await openMenuItem(page, "group-settings");
   await page.getByTestId("view-link-revoke").click();
+  await expect(page.getByTestId("view-link-url")).toHaveCount(0); // revoke saved (slow on prod) before reopening
   await page.goto(url);
   await expect(page.getByTestId("group-not-found")).toBeVisible();
 });
@@ -186,10 +187,13 @@ test("duplicate button (accessible alternative to long-press) (#16)", async ({ p
   await expect(page.getByTestId("bill-item").filter({ hasText: "Groceries" })).toHaveCount(2);
 });
 
-test("onboarding: sample data + dismissible tips (#17)", async ({ page }) => {
+test("onboarding: sample data + dismissible tips (#17)", async ({ browser, baseURL }) => {
+  // "Try sample" shows only with no trips at all (v0.4: home lists the server's trips for this identity), so this
+  // needs a brand-new person: possible locally only (DEV_IDENTITY header); the prod service token always has trips.
+  test.skip(!/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseURL!), "needs a fresh identity (local only)");
+  const ctx = await contextAs(browser, baseURL!, `new-${uniq()}@example.com`);
+  const page = await ctx.newPage();
   await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
   await page.getByTestId("try-sample").click();
   await expect(page.getByTestId("group-title")).toHaveText("Sample trip");
   await expect(page.getByTestId("bill-item")).toHaveCount(4);
@@ -198,6 +202,8 @@ test("onboarding: sample data + dismissible tips (#17)", async ({ page }) => {
   await page.reload();
   await expect(page.getByTestId("group-title")).toHaveText("Sample trip");
   await expect(page.getByTestId("tips")).toHaveCount(0);
+  await ctx.request.delete(`/api/groups/${page.url().split("/g/")[1]}`);
+  await ctx.close();
 });
 
 test("home page doesn't download the group view chunk (#18)", async ({ page }) => {

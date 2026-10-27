@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { api, apiError, RECEIPT_MAX, scheduledMaintenance, type AppEnv } from "./routes";
 import { ValidationError } from "./lib/validate";
 import { verifyAccessJwt } from "./lib/access";
+import { devIdentity, identityFromClaims, isDevIdentity } from "./lib/identity";
 import { readLimited } from "./lib/body";
 
 const MAX_BODY = 32 * 1024;
@@ -41,13 +42,19 @@ app.use("*", async (c, next) => {
   if (c.req.path.startsWith("/api/")) c.res.headers.set("Cache-Control", "no-store");
 });
 
-// Optional defense in depth: verify Cloudflare Access JWT when configured.
+// Identity (who may open which trip): the verified Cloudflare Access JWT on prod. Headers are trusted only when
+// DEV_IDENTITY=1 (local `wrangler dev --var` / test configs, never wrangler.jsonc). Neither → null → trip routes 401.
 app.use("*", async (c, next) => {
   const team = c.env.ACCESS_TEAM_DOMAIN;
   const aud = c.env.ACCESS_AUD;
-  if (team && aud) {
-    const ok = await verifyAccessJwt(c.req.header("Cf-Access-Jwt-Assertion"), team, aud);
-    if (!ok) return apiError(c, 401, "unauthorized", "valid Cloudflare Access token required");
+  if (isDevIdentity(c.env)) {
+    c.set("identity", devIdentity(c.req.raw));
+  } else if (team && aud) {
+    const claims = await verifyAccessJwt(c.req.header("Cf-Access-Jwt-Assertion"), team, aud);
+    if (!claims) return apiError(c, 401, "unauthorized", "valid Cloudflare Access token required");
+    c.set("identity", identityFromClaims(claims));
+  } else {
+    c.set("identity", null);
   }
   await next();
 });

@@ -39,6 +39,11 @@ Steps 2→3→4 = `npm run ship`. Never deploy if local fails; never commit if p
 - Every POST/PUT/PATCH must be `application/json` (CSRF guard) — bodyless actions send `{}`.
 - E2E: wait for dialogs' `data-ready="1"` and for the re-render after a save; the fixture deletes created groups.
 - `md-menu` / `md-outlined-select`: use `quick: true` (animations hang here).
+- Authorization = membership (v0.4): trip routes need `c.get("identity")` linked to a member (`members.email`).
+  Identity comes only from the verified Access JWT on prod (`src/lib/identity.ts`); tests/dev use
+  `DEV_IDENTITY=1` + the `Cf-Access-Authenticated-User-Email` header (default `dev@example.com`). A test acting as
+  a second person must link that email to a member first. Anything that looks up *another* trip (move/merge)
+  must check membership there too (`otherGroup`).
 
 ## Dispatch guidance
 

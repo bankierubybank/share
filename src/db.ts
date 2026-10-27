@@ -13,6 +13,20 @@ export interface Member {
   id: string;
   name: string;
   promptpay: string | null;
+  /** Linked identity (Access email, or `svc:<client id>`): who may open the trip as this person. */
+  email: string | null;
+}
+/** A trip as seen from one identity (home "My trips"). */
+export interface MyGroup extends Group {
+  memberId: string;
+  memberName: string;
+}
+export interface GroupAccess {
+  group: Group;
+  /** The caller's member id in this group, or null. */
+  meId: string | null;
+  /** Some member is linked; false for trips created before v0.4 until someone claims them. */
+  claimed: boolean;
 }
 export interface Bill {
   id: string;
@@ -107,13 +121,16 @@ function toBill(b: BillRow, shares: Share[], payers: Share[]): Bill {
 
 // ---------- groups ----------
 
-export async function createGroup(db: D1Database, name: string, currency: string, memberNames: string[], actor: string | null) {
+/** The creator (`identity`) is linked to member number `me`. */
+export async function createGroup(
+  db: D1Database, name: string, currency: string, memberNames: string[], me: number, identity: string, actor: string | null,
+) {
   const gid = groupId();
-  const members = memberNames.map((n) => ({ id: entityId(), name: n, promptpay: null }));
+  const members: Member[] = memberNames.map((n, i) => ({ id: entityId(), name: n, promptpay: null, email: i === me ? identity : null }));
   await db.batch([
     db.prepare("INSERT INTO groups (id, name, currency) VALUES (?, ?, ?)").bind(gid, name, currency),
     ...members.map((m, i) =>
-      db.prepare("INSERT INTO members (id, group_id, name, position) VALUES (?, ?, ?, ?)").bind(m.id, gid, m.name, i),
+      db.prepare("INSERT INTO members (id, group_id, name, position, email) VALUES (?, ?, ?, ?, ?)").bind(m.id, gid, m.name, i, m.email),
     ),
     logActivity(db, gid, actor, "group.create", gid, { name, members: memberNames.length }),
   ]);
@@ -123,6 +140,69 @@ export async function createGroup(db: D1Database, name: string, currency: string
 export async function getGroup(db: D1Database, gid: string): Promise<Group | null> {
   const r = await db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid).first<GroupRow>();
   return r ? toGroup(r) : null;
+}
+
+/** Group + the caller's place in it, in one round trip (runs on every group request). */
+export async function getGroupAccess(db: D1Database, gid: string, identity: string): Promise<GroupAccess | null> {
+  const r = await db
+    .prepare(
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at,
+         (SELECT id FROM members WHERE group_id = g.id AND email = ?2) AS me_id,
+         EXISTS (SELECT 1 FROM members WHERE group_id = g.id AND email IS NOT NULL) AS claimed
+       FROM groups g WHERE g.id = ?1`,
+    )
+    .bind(gid, identity)
+    .first<GroupRow & { me_id: string | null; claimed: number }>();
+  return r ? { group: toGroup(r), meId: r.me_id, claimed: r.claimed === 1 } : null;
+}
+
+export async function isLinked(db: D1Database, gid: string, identity: string): Promise<boolean> {
+  return (await db.prepare("SELECT 1 FROM members WHERE group_id = ? AND email = ?").bind(gid, identity).first()) !== null;
+}
+
+/** Every trip `identity` is linked to, newest first. */
+export async function groupsFor(db: D1Database, identity: string): Promise<MyGroup[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, m.id AS member_id, m.name AS member_name
+       FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? ORDER BY g.created_at DESC LIMIT 200`,
+    )
+    .bind(identity)
+    .all<GroupRow & { member_id: string; member_name: string }>();
+  return results.map((r) => ({ ...toGroup(r), memberId: r.member_id, memberName: r.member_name }));
+}
+
+export async function linkedCount(db: D1Database, gid: string): Promise<number> {
+  const r = await db.prepare("SELECT COUNT(*) AS n FROM members WHERE group_id = ? AND email IS NOT NULL").bind(gid).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
+/**
+ * Links `identity` to member `mid` ("this is me"): moves the caller's existing link, or claims an unclaimed trip.
+ * "taken" = that person is linked to someone else; "race" = someone claimed the trip meanwhile.
+ */
+export async function linkMe(
+  db: D1Database, gid: string, mid: string, identity: string, meId: string | null, actor: string | null,
+): Promise<"ok" | "not_found" | "taken" | "race"> {
+  const target = await db.prepare("SELECT name, email FROM members WHERE id = ? AND group_id = ?").bind(mid, gid).first<{ name: string; email: string | null }>();
+  if (!target) return "not_found";
+  if (target.email === identity) return "ok";
+  if (target.email !== null) return "taken";
+  if (meId === null) {
+    // Claim: only while nobody is linked, so two first visitors can't both get in.
+    const r = await db
+      .prepare("UPDATE members SET email = ?1 WHERE id = ?2 AND group_id = ?3 AND NOT EXISTS (SELECT 1 FROM members WHERE group_id = ?3 AND email IS NOT NULL)")
+      .bind(identity, mid, gid)
+      .run();
+    if (!r.meta.changes) return "race";
+  } else {
+    await db.batch([
+      db.prepare("UPDATE members SET email = NULL WHERE id = ? AND group_id = ?").bind(meId, gid),
+      db.prepare("UPDATE members SET email = ? WHERE id = ? AND group_id = ? AND email IS NULL").bind(identity, mid, gid),
+    ]);
+  }
+  await logActivity(db, gid, actor, "member.link", mid, { name: target.name }).run();
+  return "ok";
 }
 
 export async function updateGroup(
@@ -158,40 +238,51 @@ export async function deleteGroup(db: D1Database, gid: string): Promise<string[]
 
 export async function listMembers(db: D1Database, gid: string): Promise<Member[]> {
   const { results } = await db
-    .prepare("SELECT id, name, promptpay FROM members WHERE group_id = ? ORDER BY position, created_at")
+    .prepare("SELECT id, name, promptpay, email FROM members WHERE group_id = ? ORDER BY position, created_at")
     .bind(gid)
     .all<Member>();
   return results;
 }
 
-export async function addMember(db: D1Database, gid: string, name: string, promptpay: string | null, actor: string | null): Promise<Member> {
+export async function addMember(
+  db: D1Database, gid: string, name: string, promptpay: string | null, email: string | null, actor: string | null,
+): Promise<Member> {
   const id = entityId();
   await db.batch([
     db
       .prepare(
-        "INSERT INTO members (id, group_id, name, promptpay, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM members WHERE group_id = ?))",
+        "INSERT INTO members (id, group_id, name, promptpay, email, position) VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM members WHERE group_id = ?))",
       )
-      .bind(id, gid, name, promptpay, gid),
+      .bind(id, gid, name, promptpay, email, gid),
     logActivity(db, gid, actor, "member.add", id, { name }),
   ]);
-  return { id, name, promptpay };
+  return { id, name, promptpay, email };
 }
 
 export async function updateMember(
-  db: D1Database, gid: string, mid: string, patch: { name?: string; promptpay?: string | null }, actor: string | null,
+  db: D1Database, gid: string, mid: string, patch: { name?: string; promptpay?: string | null; email?: string | null }, actor: string | null,
 ): Promise<Member | null> {
-  const before = await db.prepare("SELECT id, name, promptpay FROM members WHERE id = ? AND group_id = ?").bind(mid, gid).first<Member>();
+  const before = await getMember(db, gid, mid);
   if (!before) return null;
   const after: Member = {
     id: mid,
     name: patch.name ?? before.name,
     promptpay: patch.promptpay === undefined ? before.promptpay : patch.promptpay,
+    email: patch.email === undefined ? before.email : patch.email,
   };
-  const stmts = [db.prepare("UPDATE members SET name = ?, promptpay = ? WHERE id = ? AND group_id = ?").bind(after.name, after.promptpay, mid, gid)];
+  const stmts = [
+    db.prepare("UPDATE members SET name = ?, promptpay = ?, email = ? WHERE id = ? AND group_id = ?").bind(after.name, after.promptpay, after.email, mid, gid),
+  ];
   if (after.name !== before.name) stmts.push(logActivity(db, gid, actor, "member.rename", mid, { from: before.name, to: after.name }));
   if (after.promptpay !== before.promptpay) stmts.push(logActivity(db, gid, actor, "member.promptpay", mid, { name: after.name, set: after.promptpay !== null }));
+  // The address itself stays out of the activity log.
+  if (after.email !== before.email) stmts.push(logActivity(db, gid, actor, "member.email", mid, { name: after.name, set: after.email !== null }));
   await db.batch(stmts);
   return after;
+}
+
+export async function getMember(db: D1Database, gid: string, mid: string): Promise<Member | null> {
+  return db.prepare("SELECT id, name, promptpay, email FROM members WHERE id = ? AND group_id = ?").bind(mid, gid).first<Member>();
 }
 
 /** In use = on a live bill (payer or share) or in an active recurring template. Soft-deleted bills don't count. */
