@@ -22,6 +22,7 @@ import { renderHome } from "./views/home";
 
 // The group view (and everything it pulls in) is its own chunk (#18): the home page loads less.
 const group = () => import("./views/group");
+const join = () => import("./views/join");
 
 if (typescaleStyles.styleSheet) document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
 
@@ -31,6 +32,7 @@ const root = document.getElementById("app")!;
 route("/", () => renderHome(root));
 route("/g/:id", async ({ id }) => (await group()).renderGroup(root, id));
 route("/v/:id", async ({ id }) => (await group()).renderGroup(root, id, "view"));
+route("/join/:token", async ({ token }) => (await join()).renderJoin(root, token));
 notFound(() => renderHome(root));
 
 dispatch();

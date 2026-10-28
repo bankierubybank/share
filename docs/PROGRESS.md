@@ -1,10 +1,11 @@
 # Progress
 
-_Last updated: 2026-10-27_
+_Last updated: 2026-10-28_
 
-## Status: v0.5.0 (faster saves, fewer D1 round trips) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version ab697568)
+## Status: v0.6.0 (invite links, rate limits) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 40b7a3f3)
 
-Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2 prod-only), E2E 53×4 (212) — green.
+Local 2026-10-28 (0.6.0): unit 162, integration 186, system 32, security 118 (+2 prod-only), E2E 55×4 (220), rate limit 1 — green.
+Prod 2026-10-28 (40b7a3f3): system 32, security 112 (+8 local-only), E2E 104 (+6 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left.
 
 | Area | State |
 |------|-------|
@@ -16,7 +17,7 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 | Material 3 SPA: home, group (bills/summary/people), bill dialog, settle-up | ✅ |
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
 | Tests: unit 153, integration 168, system 32, security 110 (+2 prod-only), E2E 48×4 browsers (192) | ✅ local 2026-10-27 (v0.4.0) |
-| Firefox compat | ⚠️ browser won't launch on this host (ISSUES #1) |
+| Firefox compat | ⚠️ won't launch on this Mac (ISSUES #1); runs in GitHub CI (Linux) since 0.6 |
 | Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
 | Prod tests via Access service token: system 32, security 108 (+4 local-only), E2E 92 (Chromium + iPhone) | ✅ 2026-10-27 (v0.4.0, version f8bfa8f1) |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
@@ -28,7 +29,7 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 ## Pending on owner
 - **Open "Phuket trip" and pick who you are** (v0.4: pre-0.4 trips are unclaimed; first visitor claims, then only
   linked people can open it). "Khao Sok" was claimed 2026-10-27 as "Bank". Then add the others' emails under People.
-- Stop the orphaned `wrangler dev` on :8787 (ISSUES #31).
+- Decide the Access policy for invitees (docs/ACCESS.md → Invite links): an invite link doesn't get anyone past Access.
 - **Rotate Access service token `share-tests`** (ISSUES #9). Old token was sent to Google Fonts hosts
   by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
   run `npm run test:prod` to confirm, then mark #9 closed.
@@ -82,10 +83,18 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 | 13 | Faster saves: optimistic bill add/edit/delete with rollback | ✅ |
 | 18 | Git remote + CI | ✅ remote https://github.com/bankierubybank/share (public, pushed 2026-10-28), `ci` runs on push/PR; `deploy` needs owner: secrets |
 
+## v0.6 status (round 3 picks, second batch)
+
+| # | Item | State |
+|---|------|-------|
+| 1 | Invite link / join | ✅ `/join/<token>`: pick yourself or join as new; hashed token, 14 days, rotate / turn off |
+| 16 | Rate limiting | ✅ Workers binding, per identity: 600/min `/api`, 30/min join + view links |
+| 21 | Firefox in the matrix | ✅ GitHub CI (Linux) only — see ISSUES #1 |
+
 ## Next ideas (backlog)
-- Round 3, not picked: #1 invite link / join request, #2 email autocomplete, #3 per-person balance on home,
+- Round 3, not picked: #2 email autocomplete, #3 per-person balance on home,
   #4 "my spending" across trips, #5 live FX, #6 receipt scan (Workers AI), #7 budgets, #8 bill templates,
   #9 reminders, #10 import Splitwise/KittySplit, #11 PWA/offline, #12 live refresh, #14 leave trip,
-  #16 rate limiting, #17 staging env, #19 error tracking/uptime, #20 restore drill, #21 Firefox in matrix.
+  #17 staging env, #19 error tracking/uptime, #20 restore drill.
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).

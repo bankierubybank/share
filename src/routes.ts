@@ -10,6 +10,7 @@ import { actorLabel } from "./lib/identity";
 import { runBackup } from "./backup";
 import { readLimited } from "./lib/body";
 import { registerSocial } from "./routes-social";
+import { registerInvites } from "./routes-invite";
 import { stripMemberFromSubgroups } from "./db-social";
 
 /** `identity`: verified caller (src/lib/identity.ts), set by src/index.ts; null = unknown → 401 on trip routes. */
@@ -18,7 +19,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -141,8 +142,8 @@ g.use("*", async (c, next) => {
     return c.json({ error: { code: "claim_required", message: "nobody is linked to this trip yet; pick who you are", members } }, 403);
   }
   const isRoot = /\/groups\/[^/]+\/?$/.test(c.req.path);
-  // Revoking a read-only link (and saying who you are) must always be possible, even while archived.
-  const isRevoke = m === "DELETE" && /\/view-link\/?$/.test(c.req.path);
+  // Revoking a read-only or invite link (and saying who you are) must always be possible, even while archived.
+  const isRevoke = m === "DELETE" && /\/(view-link|invite)\/?$/.test(c.req.path);
   if (group.archived && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !(isRoot && (m === "PATCH" || m === "DELETE")))
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
   c.set("group", group);
@@ -160,7 +161,7 @@ g.get("/", async (c) => {
   return c.json({ group, members, bills, me: c.get("me") });
 });
 
-/** The whole trip page in one request: GET / + summary + recurring + activity (first 50) + subgroups. */
+/** The whole trip page in one request: GET / + summary + recurring + activity (first 50) + subgroups + invite status. */
 g.get("/full", async (c) => {
   const group = c.get("group");
   if (!group.archived) await materializeDue(c.env, group.id);
@@ -171,6 +172,7 @@ g.get("/full", async (c) => {
     recurring: p.recurring,
     activity: p.activity.map((a) => ({ ...a, restorable: a.action === "bill.delete" && a.entityId !== null && p.deleted.has(a.entityId) })),
     subgroups: p.subgroups,
+    invite: p.invite,
   });
 });
 
@@ -390,5 +392,6 @@ g.delete("/recurring/:rid", async (c) => {
 });
 
 registerSocial(api, g, { apiError, readJson, summaryOf });
+registerInvites(api, g, { apiError, readJson });
 
 api.route("/groups/:gid", g);

@@ -1,4 +1,4 @@
-# API Contract (v4 — app 0.5.0)
+# API Contract (v5 — app 0.6.0)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
@@ -17,6 +17,7 @@ Errors: `{ "error": { "code": string, "message": string } }`.
 | 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
+| 429 | `rate_limited` (0.6) + `Retry-After: 60` — per identity: 600 `/api` requests a minute; 30 a minute on `/api/join/*` + `/api/view/*` |
 
 ## Types
 
@@ -80,6 +81,28 @@ default `dev@example.com`). The group id is still unguessable, but no longer eno
 | GET | `/api/me/groups` | – | `{ groups: MyGroup[] }` newest first, ≤200 |
 | POST | `/api/groups/:gid/me` | `{ memberId }` | `{ me }` — claim an unclaimed trip, or move my link to that (unlinked) person; 409 if linked to someone else (allowed while archived) |
 
+## Invite links (v5 — app 0.6.0)
+
+A trip member creates a link; whoever opens it (signed in through Cloudflare Access) picks who they are, or adds
+themselves, and their identity is linked to that person — no email typing under People. One active link per trip,
+**14 days**; creating again **rotates** (the old link stops working). The server stores only the token's SHA-256,
+so the token is returned once (on create) and the trip page can't show it again. The join side never returns the
+trip id until the caller is in the trip. Joining doesn't bypass Access: the invitee must still be allowed to sign
+in to the site (Access policy, docs/ACCESS.md).
+
+| Method | Path | Body | 2xx |
+|--------|------|------|-----|
+| GET | `/api/groups/:gid/invite` | – | `{ active: boolean, expiresAt: string \| null }` |
+| POST | `/api/groups/:gid/invite` | `{}` | `201 { token, expiresAt }` — create or rotate; link = `/join/<token>`; 409 if archived |
+| DELETE | `/api/groups/:gid/invite` | – | `204` turn off (allowed even when archived) |
+| GET | `/api/join/:token` | – | not in the trip yet: `{ joined: false, group: { name, currency, archived }, members: [{ id, name, taken }], expiresAt }`; already in it: `{ joined: true, groupId, me, group }` |
+| POST | `/api/join/:token` | `{ memberId }` **or** `{ name }` | `{ groupId, me }` (`201` when added as a new person); idempotent if already in the trip |
+
+Errors: unknown / revoked / rotated / expired token → `404`; trip archived → `409 archived`; person already
+linked to someone else, or name taken (case-insensitive) → `409 conflict`; member limit → `409`; no identity → `401`.
+Both join routes share the stricter link rate limit. Activity: `invite.create`, `invite.revoke`,
+`member.join` (`{ name }`, or `{ name, added: true }` for a new person).
+
 ## Endpoints
 
 | Method | Path | Body | 2xx |
@@ -88,7 +111,7 @@ default `dev@example.com`). The group id is still unguessable, but no longer eno
 | GET | `/api/me` | – | `{ actor: string \| null }` (Access email, `"service token"`, or null) |
 | POST | `/api/groups` | `{ name, currency, members: string[], me?: index }` | `201 { group, members, me }` (creator linked to `members[me]`) |
 | GET | `/api/groups/:gid` | – | `{ group, members, bills, me }` (`me` = my member id; live bills, newest first; materializes due recurring bills) |
-| GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups }` — same values as the separate endpoints |
+| GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups, invite /* 0.6: { active, expiresAt } */ }` — same values as the separate endpoints |
 | PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
 | DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
 | POST | `/api/groups/:gid/members` | `{ name, promptpay?, email? }` | `201 { member }` |

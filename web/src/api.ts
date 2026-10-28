@@ -32,6 +32,11 @@ export interface ViewSnapshot {
   summary: Summary;
   readOnly: true;
 }
+export interface InviteStatus { active: boolean; expiresAt: string | null }
+/** GET /join/:token — names only; `groupId` only once the caller is in the trip. */
+export type JoinInfo =
+  | { joined: true; groupId: string; me: string; group: { name: string; currency: string; archived: boolean } }
+  | { joined: false; group: { name: string; currency: string; archived: boolean }; members: { id: string; name: string; taken: boolean }[]; expiresAt: string };
 export interface BillInput {
   kind: BillKind; description: string; amount?: number; date: string; category: Category; split: Split;
   paidBy?: string; payers?: Share[]; fx?: Fx;
@@ -91,11 +96,11 @@ export const api = {
   createGroup: (name: string, currency: string, members: string[], me = 0) =>
     req<{ group: Group; members: Member[]; me: string }>("POST", "/groups", { name, currency, members, me }),
   getGroup: (gid: string) => req<{ group: Group; members: Member[]; bills: Bill[]; me: string | null }>("GET", g(gid)),
-  /** The whole trip page in one request (getGroup + summary + recurring + activity + subgroups). */
+  /** The whole trip page in one request (getGroup + summary + recurring + activity + subgroups + invite status). */
   groupPage: (gid: string) =>
     req<{
       group: Group; members: Member[]; bills: Bill[]; me: string | null; summary: Summary; recurring: Recurrence[];
-      activity: Activity[]; subgroups: Subgroup[];
+      activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus;
     }>("GET", `${g(gid)}/full`),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
@@ -135,6 +140,12 @@ export const api = {
   viewLink: (gid: string) => req<{ viewId: string | null }>("GET", `${g(gid)}/view-link`),
   createViewLink: (gid: string) => req<{ viewId: string }>("POST", `${g(gid)}/view-link`, {}),
   revokeViewLink: (gid: string) => req<void>("DELETE", `${g(gid)}/view-link`),
+  inviteStatus: (gid: string) => req<InviteStatus>("GET", `${g(gid)}/invite`),
+  createInvite: (gid: string) => req<{ token: string; expiresAt: string }>("POST", `${g(gid)}/invite`, {}),
+  revokeInvite: (gid: string) => req<void>("DELETE", `${g(gid)}/invite`),
+  joinInfo: (token: string) => req<JoinInfo>("GET", `/join/${encodeURIComponent(token)}`),
+  join: (token: string, who: { memberId: string } | { name: string }) =>
+    req<{ groupId: string; me: string }>("POST", `/join/${encodeURIComponent(token)}`, who),
   view: (vid: string) => req<ViewSnapshot>("GET", `/view/${encodeURIComponent(vid)}`),
   moveBill: (gid: string, bid: string, targetGroupId: string, addMissingMembers = false) =>
     req<{ bill: Bill; targetGroupId: string; addedMembers: string[] }>("POST", `${b(gid, bid)}/move`, { targetGroupId, addMissingMembers }),

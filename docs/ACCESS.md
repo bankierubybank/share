@@ -20,3 +20,12 @@
 
 Note: `*.workers.dev` hostnames can be protected by Access from Workers → share → Settings → Domains &
 Routes → workers.dev → "Enable Cloudflare Access" (creates the Access app for you).
+
+## Invite links (v0.6) and the Access policy
+An invite link lets someone join a trip without anyone typing their email under People — but it does **not**
+get them past Access: they must match the app's "People" policy. Owner's choice:
+- Keep the policy narrow (*Emails* list) and add each new person there too. Safest; two steps per person.
+- Widen it (e.g. *Emails ending in* `@gmail.com`, or *Everyone* with the One-time PIN login method). Since v0.4 a
+  signed-in stranger still sees no trips: trips open only for linked people, and joining needs a live invite link.
+  They can still use the app for themselves (create their own trips — D1 storage on your account), capped by the
+  per-identity rate limits. Prefer a domain or email list over *Everyone*.

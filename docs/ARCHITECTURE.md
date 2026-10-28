@@ -66,6 +66,8 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 - `bill_comments(id, bill_id FK cascade, group_id FK, author_member_id FK set null, actor, body, created_at)`
 - `subgroups(id, group_id FK, name, member_ids JSON)`
 - `groups.view_id` (unique, nullable): read-only link id, separate from the edit id
+- `groups.invite_hash` (unique, nullable) + `groups.invite_expires` (0005): SHA-256 of the current invite token
+  (the token itself is never stored), expiry 14 days after creation
 
 Shares and payers are stored resolved (cents per member), so the summary is a simple aggregation; `split_json`
 keeps the user's input (weights / percents / items) for editing. Writes of a bill + its children + activity
@@ -118,7 +120,19 @@ batches far more (ISSUES #28). Rules:
 - Writes require `Content-Type: application/json` (blocks simple-form CSRF), 32 KiB body cap — even bodyless
   POSTs (restore) send `{}`. Receipt upload is the one exception: `image/jpeg|png|webp`, ≤ 2 MiB, magic-byte
   sniffed, served back with its own `Content-Security-Policy: default-src 'none'; sandbox` (not overwritten).
-- Archived groups are read-only server-side (409 `archived`) — except revoking a read-only link.
+- Archived groups are read-only server-side (409 `archived`) — except revoking a read-only or invite link.
+- Invite links (v0.6, `src/routes-invite.ts`): the way in without someone typing your email. 128-bit token, stored
+  as SHA-256 only, 14-day expiry, one per trip (rotate = old one dies). `GET /api/join/:token` shows names and
+  whether each is taken — never the trip id, emails, PromptPay or bills — until the caller is linked. Joining links
+  the caller's verified identity to an **unlinked** person (`UPDATE … WHERE email IS NULL`, so two people can't both
+  get Bob) or adds a new person. Access still decides who can reach the site at all (docs/ACCESS.md).
+- Rate limits (v0.6, Workers rate-limit binding; rules in `src/lib/ratelimit.ts`): keyed by the verified identity
+  (IP if none). `API_LIMIT` 600/min on all `/api`; `LINK_LIMIT` 30/min on `/api/join/*` + `/api/view/*` (link
+  guessing — tokens are 128-bit anyway). Over → 429 `rate_limited` + `Retry-After: 60`. Approximate, per Cloudflare
+  location. Service tokens (`svc:…`, test automation — users can't get one) skip only the link limit unless a test
+  sends `X-Test-Rate-Key` (prod suites probe dozens of view/join ids on purpose). With `DEV_IDENTITY` (local/tests)
+  nothing is limited unless a test sends that header, which then is its own counter (parallel E2E workers share
+  `dev@example.com`). For people the header changes nothing.
 - Read-only links: `GET /api/view/:viewId` is the only route keyed by the view id; it returns a trimmed snapshot
   without the group id (the edit secret), PromptPay ids, receipts, activity or actors. Rotating issues a new id.
 - Never log another group's id anywhere readable (activity of the target after a merge logs only the name).

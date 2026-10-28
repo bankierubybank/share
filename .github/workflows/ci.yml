@@ -27,12 +27,12 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Playwright browsers
-        # Firefox stays out of the matrix (docs/ISSUES.md #1) — add it here if it launches on Linux.
-        run: npx playwright install --with-deps chromium webkit
+        # Firefox runs here (Linux) only: it won't launch on the dev Mac (docs/ISSUES.md #1), so test:local skips it.
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Local gate
         run: npm run test:local
         env:
-          COMPAT_PROJECTS: chromium webkit mobile-chrome mobile-safari
+          COMPAT_PROJECTS: chromium firefox webkit mobile-chrome mobile-safari
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4

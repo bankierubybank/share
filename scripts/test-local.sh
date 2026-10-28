@@ -30,5 +30,6 @@ step "system";   npm run -s test:system
 step "security"; npm run -s test:security
 args=(); for p in $COMPAT_PROJECTS; do args+=(--project="$p"); done
 step "e2e + compatibility ($COMPAT_PROJECTS)"; npx playwright test "${args[@]}"
+step "rate limits (last: spends this identity's link budget)"; npm run -s test:ratelimit
 
 printf '\n\033[1;32m✔ local tests passed\033[0m\n'

@@ -10,7 +10,7 @@ import "@material/web/progress/circular-progress.js";
 import "@material/web/tabs/tabs.js";
 import "@material/web/tabs/primary-tab.js";
 
-import { api, ApiError, type Activity, type Bill, type Category, type Group, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
+import { api, ApiError, type Activity, type Bill, type Category, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney } from "../money";
@@ -43,6 +43,8 @@ interface State {
   recurring: Recurrence[];
   activity: Activity[];
   subgroups: Subgroup[];
+  /** Invite link status (absent in view mode). */
+  invite?: InviteStatus;
   /** My member id (linked identity); null in view mode. */
   me: string | null;
 }
@@ -794,7 +796,60 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
                 },
               }, icon("person_remove")))))),
       !readOnly() && h("div", { class: "row pad" },
-        h("md-filled-tonal-button", { onclick: () => editMember(null), dataset: { testid: "add-member-btn" } }, icon("person_add", "icon"), t("member.add"))));
+        h("md-filled-tonal-button", { onclick: () => editMember(null), dataset: { testid: "add-member-btn" } }, icon("person_add", "icon"), t("member.add"))),
+      !readOnly() && inviteSection());
+  }
+
+  // ---------- invite link (v0.6) ----------
+  /** The token is returned only when created (the server keeps its hash): kept here across re-renders. */
+  let inviteShown: { token: string; expiresAt: string } | null = null;
+
+  function inviteSection() {
+    const host = h("div", { class: "stack-sm pad invite-section", dataset: { testid: "invite-section" } });
+    const day = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: "numeric", month: "short", year: "numeric" });
+    const make = async (rotate: boolean) => {
+      try {
+        inviteShown = await api.createInvite(gid);
+        paint({ active: true, expiresAt: inviteShown.expiresAt });
+        snackbar(rotate ? t("invite.rotated") : t("invite.created"));
+      } catch (e) {
+        snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
+      }
+    };
+    const paint = (st: InviteStatus) => {
+      state.invite = st;
+      // Someone else rotated or turned it off meanwhile: the token we hold no longer works.
+      if (!st.active || (inviteShown && st.expiresAt !== inviteShown.expiresAt)) inviteShown = null;
+      const url = st.active && inviteShown ? `${location.origin}/join/${inviteShown.token}` : null;
+      clear(host,
+        h("h3", { class: "md-typescale-title-small row tight" }, icon("link"), t("invite.title")),
+        h("p", { class: "md-typescale-body-small muted", dataset: { testid: "invite-status" } },
+          url ? t("invite.help") : st.active && st.expiresAt ? t("invite.activeUntil", { date: day(st.expiresAt) }) : t("invite.helpNone")),
+        url && h("div", { class: "link-box md-typescale-body-small", dataset: { testid: "invite-url" } }, url),
+        url && h("p", { class: "md-typescale-body-small muted" }, t("invite.expires", { date: day(inviteShown!.expiresAt) }), " · ", t("invite.accessNote")),
+        h("div", { class: "row wrap" },
+          url && h("md-filled-tonal-button", { dataset: { testid: "invite-copy" }, onclick: async () => {
+            try { await navigator.clipboard.writeText(url); snackbar(t("invite.copied")); } catch { snackbar(url); }
+          } }, icon("content_copy", "icon"), t("common.copy")),
+          url && typeof navigator.share === "function" && h("md-outlined-button", { dataset: { testid: "invite-share" }, onclick: () => {
+            navigator.share({ title: state.group.name, text: t("invite.shareText", { name: state.group.name }), url }).catch(() => undefined);
+          } }, icon("share", "icon"), t("group.shareLink")),
+          h(st.active ? "md-text-button" : "md-outlined-button", { dataset: { testid: st.active ? "invite-rotate" : "invite-create" }, onclick: () => make(st.active) },
+            st.active ? t("invite.new") : t("invite.create")),
+          st.active && h("md-text-button", { class: "danger", dataset: { testid: "invite-revoke" }, onclick: async () => {
+            try {
+              await api.revokeInvite(gid);
+              paint({ active: false, expiresAt: null });
+              snackbar(t("invite.off"));
+            } catch (e) {
+              snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
+            }
+          } }, t("invite.turnOff"))));
+    };
+    // Status comes with the page (GET …/full): no extra request.
+    paint(state.invite ?? { active: false, expiresAt: null });
+    host.dataset.ready = "1";
+    return host;
   }
 
   function activityPanel() {
@@ -842,6 +897,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "member.remove": return t("act.memberRemove", { name: nm("name") });
       case "member.email": return t(d.set ? "act.emailSet" : "act.emailRemoved", { name: nm("name") });
       case "member.link": return t("act.memberLink", { name: nm("name") });
+      case "member.join": return t(d.added ? "act.memberJoinNew" : "act.memberJoin", { name: nm("name") });
+      case "invite.create": return t("act.inviteCreate");
+      case "invite.revoke": return t("act.inviteRevoke");
       case "bill.create": return t(d.kind === "payment" ? "act.paymentCreate" : "act.billCreate", dd);
       case "bill.update": return t("act.billUpdate", dd);
       case "bill.delete": return t("act.billDelete", dd);

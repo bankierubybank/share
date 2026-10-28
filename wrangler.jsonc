@@ -28,6 +28,12 @@
     { "binding": "RECEIPTS", "bucket_name": "share-receipts" },
     { "binding": "BACKUPS", "bucket_name": "share-backups" }
   ],
+  // Per-identity limits (src/index.ts → rate limit). Approximate, counted per Cloudflare location.
+  // API: every /api request (600/min). LINKS: /api/join + /api/view, tokens someone might try to guess (30/min).
+  "ratelimits": [
+    { "name": "API_LIMIT", "namespace_id": "7301", "simple": { "limit": 600, "period": 60 } },
+    { "name": "LINK_LIMIT", "namespace_id": "7302", "simple": { "limit": 30, "period": 60 } }
+  ],
   // Daily: D1 backup to R2, materialize due recurring bills, purge bills deleted > 30 days ago.
   "triggers": { "crons": ["17 0 * * *"] },
   "vars": {

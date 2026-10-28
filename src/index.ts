@@ -5,6 +5,7 @@ import { verifyAccessJwt } from "./lib/access";
 import { devIdentity, identityFromClaims, isDevIdentity } from "./lib/identity";
 import { readLimited } from "./lib/body";
 import { timedD1 } from "./lib/dbtiming";
+import { ratePlan } from "./lib/ratelimit";
 
 const MAX_BODY = 32 * 1024;
 
@@ -56,6 +57,23 @@ app.use("*", async (c, next) => {
     c.set("identity", identityFromClaims(claims));
   } else {
     c.set("identity", null);
+  }
+  await next();
+});
+
+// Rate limit per verified identity; who gets which limit: src/lib/ratelimit.ts.
+app.use("/api/*", async (c, next) => {
+  const { key, link } = ratePlan(
+    c.get("identity"), c.req.header("CF-Connecting-IP") ?? null, c.req.path, c.req.header("X-Test-Rate-Key") ?? null, isDevIdentity(c.env),
+  );
+  if (key === null) return next();
+  const limiters = link ? [c.env.API_LIMIT, c.env.LINK_LIMIT] : [c.env.API_LIMIT];
+  for (const l of limiters) {
+    if (!(await l.limit({ key })).success) {
+      const res = apiError(c, 429, "rate_limited", "too many requests; wait a minute and try again");
+      res.headers.set("Retry-After", "60");
+      return res;
+    }
   }
   await next();
 });

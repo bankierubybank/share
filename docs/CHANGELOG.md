@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — 2026-10-28
+
+Owner picks from round 3: #1 invite link, #16 rate limiting, #21 Firefox in the matrix.
+Also since 0.5.0: GitHub remote `bankierubybank/share` (public), CI live; deploy workflow hardened for a public repo.
+
+### Invite links (#1)
+- People → **Invite link**: create a link (`/join/<token>`), copy or share it. Whoever opens it signs in, picks
+  who they are in the trip (people already linked show "Already joined") or joins as a new person — nobody has to
+  type their email. One link per trip, 14 days; **New link** rotates (old one dies), **Turn off** revokes.
+- Only the token's SHA-256 is stored (migration `0005_invites`), so the link is shown once — after a reload the
+  section says it's active until a date. Status comes with the trip page (`GET …/full`), still one request.
+- The join page never sees the trip id, emails, PromptPay or bills until the person is in. Activity logs
+  `invite.create|revoke` and "X joined by invite link".
+- Access still gates the site: invitees must be allowed by the Access policy (docs/ACCESS.md has the options).
+- API: `GET|POST|DELETE /api/groups/:gid/invite`, `GET|POST /api/join/:token` (docs/API.md → Invite links).
+
+### Rate limiting (#16)
+- Workers rate-limit binding, per verified identity: 600 requests/min on `/api`, 30/min on `/api/join/*` and
+  `/api/view/*` (link guessing). Over → `429 rate_limited` + `Retry-After: 60`.
+- Service tokens (test automation) skip the link limit unless a test opts in with `X-Test-Rate-Key`; locally
+  nothing is limited without that header (parallel E2E shares one dev identity). New gate step `test:ratelimit`
+  runs last locally and on prod (it trips the link limit on purpose). Rules + unit tests: `src/lib/ratelimit.ts`.
+- First prod run of 0.6 (version 3f0fef43) failed 10 security tests with 429: the suites' own view-id brute-force
+  checks used up the service token's link budget. Fixed forward (above) before committing (ISSUES #37).
+
+### Firefox (#21)
+- CI (Linux) installs Firefox and runs the E2E suite on it too; the dev Mac still skips it (ISSUES #1).
+
 ## 0.5.0 — 2026-10-27
 
 Owner picks from round 3: #15 D1 write latency, #13 faster saves, #18 CI draft (+ repo name).

@@ -1,6 +1,6 @@
 {
   "name": "share",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Bill-splitting web app (Splitwise/KittySplit style) on Cloudflare Workers + D1",
@@ -15,6 +15,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
     "test:security": "vitest run --config vitest.security.config.ts",
+    "test:ratelimit": "vitest run --config vitest.ratelimit.config.ts",
     "test:e2e": "playwright test --project=chromium",
     "test:compat": "playwright test",
     "test:local": "bash scripts/test-local.sh",

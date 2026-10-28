@@ -400,8 +400,12 @@ export async function groupPage(db: D1Database, gid: string, activityLimit: numb
     activityStatement(db, gid, activityLimit),
     db.prepare("SELECT id FROM bills WHERE group_id = ? AND deleted_at IS NOT NULL").bind(gid),
     db.prepare("SELECT id, name, member_ids FROM subgroups WHERE group_id = ? ORDER BY created_at, id").bind(gid),
+    db.prepare("SELECT invite_expires FROM groups WHERE id = ? AND invite_hash IS NOT NULL").bind(gid),
   ]);
+  const inv = (r[8].results as { invite_expires: string }[])[0];
+  const inviteLive = !!inv && inv.invite_expires > new Date().toISOString();
   return {
+    invite: { active: inviteLive, expiresAt: inviteLive ? inv.invite_expires : null },
     members: r[0].results as unknown as Member[],
     bills: billsFrom(r.slice(1, 4)),
     recurring: (r[4].results as unknown as RecRow[]).map(toRec),

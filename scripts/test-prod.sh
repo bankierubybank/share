@@ -17,5 +17,6 @@ curl -sf -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID:-}" -H "CF-Access-Client
 step "system";   npm run -s test:system
 step "security"; npm run -s test:security
 step "e2e (chromium, mobile-safari)"; npx playwright test --project=chromium --project=mobile-safari
+step "rate limits (last: spends this identity's link budget)"; npm run -s test:ratelimit
 
 printf '\n\033[1;32m✔ prod tests passed\033[0m\n'
