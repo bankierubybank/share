@@ -17,7 +17,7 @@ Prod 2026-10-28 (40b7a3f3): system 32, security 112 (+8 local-only), E2E 104 (+6
 | Material 3 SPA: home, group (bills/summary/people), bill dialog, settle-up | ✅ |
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
 | Tests: unit 153, integration 168, system 32, security 110 (+2 prod-only), E2E 48×4 browsers (192) | ✅ local 2026-10-27 (v0.4.0) |
-| Firefox compat | ⚠️ won't launch on this Mac (ISSUES #1); runs in GitHub CI (Linux) since 0.6 |
+| Firefox compat | ✅ GitHub CI (Linux): 55/55 E2E green 2026-10-28 · ⚠️ still won't launch on this Mac (ISSUES #1) |
 | Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
 | Prod tests via Access service token: system 32, security 108 (+4 local-only), E2E 92 (Chromium + iPhone) | ✅ 2026-10-27 (v0.4.0, version f8bfa8f1) |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
