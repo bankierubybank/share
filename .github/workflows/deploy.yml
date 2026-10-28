@@ -66,7 +66,8 @@ jobs:
 
       - name: Roll back the Worker if prod tests failed
         if: failure() && steps.prod.outcome == 'failure'
-        run: npx wrangler rollback --message "CI: prod tests failed for ${GITHUB_SHA::7}" -y
+        run: |
+          npx wrangler rollback --message "CI: prod tests failed for ${GITHUB_SHA::7}" -y
 
       # No Playwright report upload here: artifacts are downloadable on a public repo, and prod traces record request
       # headers (the Access service token). Debug prod failures locally with `npm run test:prod`.

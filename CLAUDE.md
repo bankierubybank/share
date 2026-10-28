@@ -14,7 +14,10 @@ Read first: `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/PROGRESS.md`, `docs/ISS
 4. **Test prod**: `npm run test:prod` (needs `.env.test`, see `.env.test.example`).
 5. **Update docs**: `docs/CHANGELOG.md` (what changed), `docs/PROGRESS.md` (status), `docs/ISSUES.md`
    (bugs found/fixed, open problems), `docs/ARCHITECTURE.md` / `docs/API.md` if design/contract changed.
-6. **Commit** (Conventional Commits). **Push** to remote once one is configured (none yet — skip).
+6. **Commit** (Conventional Commits). **Push** to `origin` = https://github.com/bankierubybank/share (public):
+   `GH_TOKEN=$(gh auth token -u bankierubybank) git push` (the active `gh` account is a work account without
+   access). Commit email for this repo: `chatchai.wongdet@gmail.com` (never the work address — the repo is public).
+   Pushing `main` runs `ci`, then `deploy` (see docs/CI.md) once its secrets exist.
 
 Steps 2→3→4 = `npm run ship`. Never deploy if local fails; never commit if prod tests fail
 (fix forward or `npx wrangler rollback`).

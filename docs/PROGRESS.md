@@ -23,7 +23,7 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 | Demo trip "Phuket trip" on prod (link kept out of the repo: ids are secrets) | ✅ |
 | Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |
 | In-Worker Access JWT check (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) | ✅ v0.4.0 (required for membership) |
-| Remote git | ⏳ owner to configure |
+| Remote git | ✅ https://github.com/bankierubybank/share (public) |
 
 ## Pending on owner
 - **Open "Phuket trip" and pick who you are** (v0.4: pre-0.4 trips are unclaimed; first visitor claims, then only
@@ -32,7 +32,8 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 - **Rotate Access service token `share-tests`** (ISSUES #9). Old token was sent to Google Fonts hosts
   by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
   run `npm run test:prod` to confirm, then mark #9 closed.
-- Configure git remote (then push).
+- Add the 3 Actions secrets + Settings from `docs/CI.md` (steps 3–6) — until then `deploy` fails at its first
+  Cloudflare step after each green `ci` (no harm, nothing deployed).
 ## v0.2 feature status (backlog picks)
 
 | # | Item | State |
@@ -79,7 +80,7 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 |---|------|-------|
 | 15 | D1 write latency: fewer round trips, one-request trip page, Smart Placement, Server-Timing | ✅ |
 | 13 | Faster saves: optimistic bill add/edit/delete with rollback | ✅ |
-| 18 | Git remote + CI | 📝 drafted (`.github/workflows/`, `docs/CI.md`); needs owner: GitHub repo + secrets |
+| 18 | Git remote + CI | ✅ remote https://github.com/bankierubybank/share (public, pushed 2026-10-28), `ci` runs on push/PR; `deploy` needs owner: secrets |
 
 ## Next ideas (backlog)
 - Round 3, not picked: #1 invite link / join request, #2 email autocomplete, #3 per-person balance on home,
