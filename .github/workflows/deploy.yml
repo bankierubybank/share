@@ -20,7 +20,14 @@ concurrency:
 
 jobs:
   ship:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # `branches: [main]` only matches the branch *name* — a fork PR from a branch called main would pass it.
+    # Deploy only CI runs from a push to this repo (fork PRs never get the prod secrets).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Optional: add required reviewers to this environment (Settings → Environments) to approve each deploy.
@@ -61,12 +68,5 @@ jobs:
         if: failure() && steps.prod.outcome == 'failure'
         run: npx wrangler rollback --message "CI: prod tests failed for ${GITHUB_SHA::7}" -y
 
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: prod-playwright-report
-          path: |
-            playwright-report/
-            test-results/
-          retention-days: 7
+      # No Playwright report upload here: artifacts are downloadable on a public repo, and prod traces record request
+      # headers (the Access service token). Debug prod failures locally with `npm run test:prod`.

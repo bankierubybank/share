@@ -20,7 +20,7 @@ Local 2026-10-27 (0.5.0): unit 157, integration 175, system 32, security 110 (+2
 | Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
 | Prod tests via Access service token: system 32, security 108 (+4 local-only), E2E 92 (Chromium + iPhone) | ✅ 2026-10-27 (v0.4.0, version f8bfa8f1) |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
-| Demo trip "Phuket trip" on prod: /g/bT3gqiknUCsOAW1r_2za5A | ✅ |
+| Demo trip "Phuket trip" on prod (link kept out of the repo: ids are secrets) | ✅ |
 | Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |
 | In-Worker Access JWT check (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) | ✅ v0.4.0 (required for membership) |
 | Remote git | ⏳ owner to configure |

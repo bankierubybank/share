@@ -15,7 +15,12 @@ migrations stay, so they must be backwards-compatible). Deploys never run in par
 
 ## One-time setup (owner)
 
-1. Create the repo (suggested names below) — **private** (prod test output and logs mention trip names).
+1. Create the repo `share` — public is fine (no secrets in history; prod access = Cloudflare Access + trip
+   membership). Public-repo rules the workflows already follow: `deploy` runs only for CI on a push to this repo's
+   `main` (never a fork PR, even one from a branch named `main`); no prod artifacts are uploaded (Playwright traces
+   hold the Access service-token headers); CI on PRs has no secrets. Keep it that way: never `pull_request_target`,
+   never upload prod test output, never put a real trip link (`/g/…`, `/v/…`) in the repo.
+   Settings → Actions → General: *Require approval for all outside collaborators* for fork PR runs.
 2. `git remote add origin git@github.com:<you>/<repo>.git && git push -u origin main`
 3. Settings → Secrets and variables → Actions → *New repository secret*:
    - `CLOUDFLARE_API_TOKEN` — a **new** token just for CI (don't reuse `.env`'s): Account → Workers Scripts:Edit,
