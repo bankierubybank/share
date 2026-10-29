@@ -1,11 +1,11 @@
 # Progress
 
-_Last updated: 2026-10-28_
+_Last updated: 2026-10-29_
 
-## Status: v0.6.0 (invite links, rate limits) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 40b7a3f3)
+## Status: v0.7.0 (UI/UX revamp) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version ada39834)
 
-Local 2026-10-28 (0.6.0): unit 162, integration 186, system 32, security 118 (+2 prod-only), E2E 55×4 (220), rate limit 1 — green.
-Prod 2026-10-28 (40b7a3f3): system 32, security 112 (+8 local-only), E2E 104 (+6 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left.
+Local 2026-10-29 (0.7.0): unit 162, integration 186, system 32, security 118 (+2 prod-only), E2E 59×4 (236), rate limit 1 — green.
+Prod 2026-10-29 (ada39834): system 32, security 112 (+8 local-only), E2E 112 (+6 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left (9 from the failed first 0.7 run deleted with owner OK, ISSUES #40).
 
 | Area | State |
 |------|-------|
@@ -90,6 +90,15 @@ Prod 2026-10-28 (40b7a3f3): system 32, security 112 (+8 local-only), E2E 104 (+6
 | 1 | Invite link / join | ✅ `/join/<token>`: pick yourself or join as new; hashed token, 14 days, rotate / turn off |
 | 16 | Rate limiting | ✅ Workers binding, per identity: 600/min `/api`, 30/min join + view links |
 | 21 | Firefox in the matrix | ✅ GitHub CI (Linux) only — see ISSUES #1 |
+
+## v0.7 status (UI/UX review)
+
+| Item | State |
+|------|-------|
+| Trip header: your position + next payments with Settle, on every tab; "View as" inside it | ✅ |
+| Phone: slim tips, first bill on the first screen; laptop: two balanced columns | ✅ |
+| Narrow currency symbols (฿, $, €); fx amounts keep the code | ✅ |
+| Home: your trips first; "trip" wording EN + TH; "Not joined yet"; no premature red error in Add bill | ✅ |
 
 ## Next ideas (backlog)
 - Round 3, not picked: #2 email autocomplete, #3 per-person balance on home,

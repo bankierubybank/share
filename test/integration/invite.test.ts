@@ -181,7 +181,7 @@ describe("rate limits", () => {
       return -1;
     });
     expect(first429).toBe(600);
-  });
+  }, 30_000); // 600+ requests (twice if it straddles a minute) outgrow the 5 s default on a busy machine
 
   it("without the test key, dev mode is not limited (E2E shares one identity)", async () => {
     for (let i = 0; i < 35; i++) expect((await call("rl3@x.io", "GET", "/api/join/AAAAAAAAAAAAAAAAAAAAAA")).status).toBe(404);

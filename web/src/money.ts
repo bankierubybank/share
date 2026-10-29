@@ -30,11 +30,15 @@ export function fractionDigits(currency: string): number {
 }
 
 const fmtCache = new Map<string, Intl.NumberFormat>();
-export function formatMoney(minor: number, currency: string): string {
-  const ck = `${lang()}|${currency}`;
+/**
+ * `narrowSymbol` (฿1,250.00, $12.00) reads best for the trip's own currency. Use `code` (USD 12.00) wherever two
+ * currencies appear together (fx), since narrow symbols are ambiguous ($ = USD, SGD, AUD…).
+ */
+export function formatMoney(minor: number, currency: string, display: "narrowSymbol" | "code" = "narrowSymbol"): string {
+  const ck = `${lang()}|${currency}|${display}`;
   let f = fmtCache.get(ck);
   if (!f) {
-    f = new Intl.NumberFormat(locale(), { style: "currency", currency });
+    f = new Intl.NumberFormat(locale(), { style: "currency", currency, currencyDisplay: display });
     fmtCache.set(ck, f);
   }
   return f.format(minor / 10 ** fractionDigits(currency));

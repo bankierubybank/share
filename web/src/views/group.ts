@@ -536,7 +536,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         const mine = viewAs ? b.shares.find((s) => s.memberId === viewAs)?.amount ?? 0 : null;
         const supporting = isPayment ? `${payers} → ${memberName(b.shares[0]?.memberId ?? "")}` : t("bills.paidBy", { payers, who });
         const extras = [
-          b.fx && `${formatMoney(b.fx.amount, b.fx.currency)} @ ${b.fx.rate}`,
+          b.fx && `${formatMoney(b.fx.amount, b.fx.currency, "code")} @ ${b.fx.rate}`,
           b.recurrenceId && t("bills.repeating"),
           b.hasReceipt && t("bills.receipt"),
           b.commentCount > 0 && tn("bills.comments", b.commentCount),
@@ -591,19 +591,45 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         })));
   }
 
-  function myCard() {
-    if (!viewAs) return null;
-    const b = state.summary.balances.find((x) => x.memberId === viewAs);
-    if (!b) return null;
-    const mineOut = state.summary.settlements.filter((s) => s.from === viewAs);
-    const mineIn = state.summary.settlements.filter((s) => s.to === viewAs);
-    const name = memberName(viewAs);
-    return h("section", { class: `card my-card ${b.net > 0 ? "pos" : b.net < 0 ? "neg" : ""}`, dataset: { testid: "my-card" }, "aria-live": "polite" },
-      h("h2", { class: "md-typescale-title-medium" }, t("mycard.title", { name })),
-      h("p", { class: "md-typescale-headline-small tabular" }, b.net > 0 ? t("mycard.getsBack", { amount: money(b.net) }) : b.net < 0 ? t("mycard.owes", { amount: money(-b.net) }) : t("mycard.settled")),
-      h("p", { class: "md-typescale-body-medium muted tabular" }, t("mycard.spent", { paid: money(b.paid), owed: money(b.owed) })),
-      mineOut.map((s) => h("p", { class: "md-typescale-body-large" }, t("mycard.pay", { name: memberName(s.to), amount: money(s.amount) }))),
-      mineIn.map((s) => h("p", { class: "md-typescale-body-large" }, t("mycard.paysYou", { name: memberName(s.from), amount: money(s.amount) }))));
+  /**
+   * Top of the trip, on every tab: where you stand (or the "View as" person), what to do next (pay / get paid,
+   * with Settle), and the trip total. Answers "do I owe anything?" without opening Summary.
+   */
+  function tripHeader() {
+    const { summary } = state;
+    const who = viewAs ?? state.me;
+    // No bills yet: invite the first one instead of saying "settled".
+    const bal = who && state.bills.length ? summary.balances.find((x) => x.memberId === who) : undefined;
+    const you = !!who && who === state.me;
+    const name = who ? memberName(who) : "";
+    const tone = bal ? (bal.net > 0 ? "pos" : bal.net < 0 ? "neg" : "zero") : "";
+    const net = bal && (you
+      ? bal.net > 0 ? t("hero.youGet", { amount: money(bal.net) }) : bal.net < 0 ? t("hero.youOwe", { amount: money(-bal.net) }) : t("hero.youSettled")
+      : bal.net > 0 ? t("mycard.getsBack", { amount: money(bal.net) }) : bal.net < 0 ? t("mycard.owes", { amount: money(-bal.net) }) : t("mycard.settled"));
+    const actions = who ? summary.settlements.filter((s) => s.from === who || s.to === who).map((s) => {
+      const out = s.from === who;
+      const text = out
+        ? t("mycard.pay", { name: memberName(s.to), amount: money(s.amount) })
+        : you ? t("mycard.paysYou", { name: memberName(s.from), amount: money(s.amount) })
+          : t("mycard.paysThem", { from: memberName(s.from), name, amount: money(s.amount) });
+      return h("li", { class: out ? "out" : "in", dataset: { testid: "hero-action" } },
+        icon(out ? "arrow_forward" : "payments"),
+        h("span", { class: "grow md-typescale-body-large" }, text),
+        !readOnly() && h("md-filled-tonal-button", { onclick: () => addBill({ from: s.from, to: s.to, amount: s.amount }), dataset: { testid: "hero-settle" },
+          "aria-label": t("summary.settleAria", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }) }, t("summary.settle")));
+    }) : [];
+    return h("section", { class: `trip-hero ${tone}`, dataset: { testid: "my-card" }, "aria-live": "polite", "aria-label": who ? (you ? t("hero.you") : t("mycard.title", { name })) : t("hero.trip") },
+      h("div", { class: "hero-top" },
+        h("span", { class: "hero-who md-typescale-label-large" }, who ? (you ? `${t("hero.you")} · ${name}` : t("mycard.title", { name })) : t("hero.trip")),
+        state.members.length > 1 && viewAsSelect()),
+      bal
+        ? h("p", { class: "hero-net md-typescale-headline-medium tabular", dataset: { testid: "my-net" } }, net)
+        : h("p", { class: "hero-net md-typescale-headline-medium tabular" }, state.bills.length ? money(summary.total) : t("hero.nothingYet")),
+      bal && h("p", { class: "md-typescale-body-medium hero-sub tabular" }, t("mycard.spent", { paid: money(bal.paid), owed: money(bal.owed) })),
+      actions.length > 0 && h("ul", { class: "hero-actions", "aria-label": t("summary.whoPays") }, actions),
+      h("p", { class: "md-typescale-body-medium hero-sub hero-stats" },
+        bal && h("span", { class: "tabular" }, `${t("hero.trip")} ${money(summary.total)} · `),
+        t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) })));
   }
 
   function summaryPanel() {
@@ -635,7 +661,6 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
               h("span", { class: "tabular" }, t("balance.share", { amount: money(b.owed) })))))));
 
     return h("div", { class: "stack-lg" },
-      myCard(),
       h("section", { class: "card flush", "aria-labelledby": "pays-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, t("summary.whoPays"))), settlements),
       h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, t("summary.balances"))), balances),
       categoryChart(),
@@ -758,14 +783,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   // ---------- first-visit tips (#17) ----------
   function tipsBanner() {
     if (readOnly() || local.get("share.tipsDismissed")) return null;
-    const el = h("section", { class: "tips card tonal", role: "note", dataset: { testid: "tips" } },
-      h("div", { class: "row" }, h("h2", { class: "md-typescale-title-small grow" }, t("tips.title")),
-        h("md-icon-button", { "aria-label": t("tips.dismiss"), dataset: { testid: "tips-dismiss" }, onclick: () => { local.set("share.tipsDismissed", "1"); el.remove(); } }, icon("close"))),
-      h("ul", { class: "md-typescale-body-medium" },
-        h("li", null, t("tips.1")),
-        h("li", null, t("tips.2")),
-        h("li", null, t("tips.3")),
-        h("li", null, t("tips.4"))));
+    // One slim line (expand for the list): it used to push the first bill below the fold on phones.
+    const el = h("section", { class: "tips", role: "note", dataset: { testid: "tips" } },
+      h("details", { class: "grow" },
+        h("summary", { class: "md-typescale-label-large" }, icon("info"), t("tips.title")),
+        h("ul", { class: "md-typescale-body-medium" },
+          h("li", null, t("tips.1")),
+          h("li", null, t("tips.2")),
+          h("li", null, t("tips.3")),
+          h("li", null, t("tips.4")))),
+      h("md-icon-button", { "aria-label": t("tips.dismiss"), dataset: { testid: "tips-dismiss" }, onclick: () => { local.set("share.tipsDismissed", "1"); el.remove(); } }, icon("close")));
     return el;
   }
 
@@ -957,11 +984,15 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         icon("archive"), h("span", { class: "grow" }, t("group.archivedBanner")),
         h("md-text-button", { onclick: async () => { await api.updateGroup(gid, { archived: false }); snackbar("Group unarchived"); refresh(); }, dataset: { testid: "banner-unarchive" } }, t("settings.unarchive"))),
       tipsBanner(),
-      h("div", { class: "toolbar" }, viewAsSelect()),
-      panel("bills", billsPanel()),
-      panel("summary", summaryPanel()),
-      panel("members", h("div", { class: "stack-lg" }, membersPanel(), subgroupsPanel())),
-      !isView && panel("activity", activityPanel()));
+      tripHeader(),
+      // Two columns on laptops (bills + activity | summary + people); on phones one panel at a time (tabs).
+      h("div", { class: "cols" },
+        h("div", { class: "col-main stack-lg" },
+          panel("bills", billsPanel()),
+          !isView && panel("activity", activityPanel())),
+        h("div", { class: "col-side stack-lg" },
+          panel("summary", summaryPanel()),
+          panel("members", h("div", { class: "stack-lg" }, membersPanel(), subgroupsPanel())))));
 
     clear(root,
       h("a", { class: "skip-link", href: "#main" }, t("group.skip")),

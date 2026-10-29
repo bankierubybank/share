@@ -18,10 +18,11 @@ describe("ratePlan", () => {
     expect(ratePlan(null, null, "/api/health", null, false)).toEqual({ key: "ip:unknown", link: false });
   });
 
-  it("service tokens: API limit always, link limit only when a test opts in", () => {
-    expect(ratePlan("svc:abc.access", null, "/api/view/abc", null, false)).toEqual({ key: "svc:abc.access", link: false });
+  it("service tokens: no limits unless a test opts in; then counted under their identity", () => {
+    expect(ratePlan("svc:abc.access", null, "/api/view/abc", null, false)).toEqual({ key: null, link: false });
+    expect(ratePlan("svc:abc.access", null, "/api/groups", null, false)).toEqual({ key: null, link: false });
     expect(ratePlan("svc:abc.access", null, "/api/view/abc", "gate", false)).toEqual({ key: "svc:abc.access", link: true });
-    expect(ratePlan("svc:abc.access", null, "/api/groups", null, false)).toEqual({ key: "svc:abc.access", link: false });
+    expect(ratePlan("svc:abc.access", null, "/api/groups", "gate", false)).toEqual({ key: "svc:abc.access", link: false });
   });
 
   it("dev mode: nothing unless opted in, then the test's own counter", () => {

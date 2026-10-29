@@ -16,16 +16,16 @@ async function openMenuItem(page: Page, testid: string) {
 
 test("switch to Thai and back; amounts stay formatted", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTestId("create-group")).toContainText("Create group");
+  await expect(page.getByTestId("create-group")).toContainText("Create trip");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByTestId("lang-toggle-home")).toContainText("ภาษาไทย");
 
   // Home: English -> Thai without a reload.
   await page.getByTestId("lang-toggle-home").click();
-  await expect(page.getByTestId("create-group")).toContainText("สร้างกลุ่ม");
+  await expect(page.getByTestId("create-group")).toContainText("สร้างทริป");
   await expect(page.locator("html")).toHaveAttribute("lang", "th");
   await expect(page.getByTestId("lang-toggle-home")).toContainText("English");
-  await expect(page.getByTestId("group-name").filter({ visible: true }).first()).toHaveJSProperty("label", "ชื่อกลุ่ม");
+  await expect(page.getByTestId("group-name").filter({ visible: true }).first()).toHaveJSProperty("label", "ชื่อทริป");
 
   // The choice survives navigation (createGroup does a fresh page.goto).
   const name = `Lang ${uniq()}`;
@@ -93,7 +93,7 @@ test("group menu toggle switches to Thai", async ({ page }) => {
 
 test("English is the default for an English browser", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTestId("create-group")).toContainText("Create group");
+  await expect(page.getByTestId("create-group")).toContainText("Create trip");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
 });
 
@@ -102,13 +102,13 @@ test.describe("Thai browser", () => {
 
   test("fresh visit defaults to Thai; an explicit choice wins", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByTestId("create-group")).toContainText("สร้างกลุ่ม");
+    await expect(page.getByTestId("create-group")).toContainText("สร้างทริป");
     await expect(page.locator("html")).toHaveAttribute("lang", "th");
     await expect(page.getByTestId("lang-toggle-home")).toContainText("English");
 
     await page.getByTestId("lang-toggle-home").click();
-    await expect(page.getByTestId("create-group")).toContainText("Create group");
+    await expect(page.getByTestId("create-group")).toContainText("Create trip");
     await page.reload();
-    await expect(page.getByTestId("create-group")).toContainText("Create group");
+    await expect(page.getByTestId("create-group")).toContainText("Create trip");
   });
 });

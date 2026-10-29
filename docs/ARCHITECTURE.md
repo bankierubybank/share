@@ -129,8 +129,8 @@ batches far more (ISSUES #28). Rules:
 - Rate limits (v0.6, Workers rate-limit binding; rules in `src/lib/ratelimit.ts`): keyed by the verified identity
   (IP if none). `API_LIMIT` 600/min on all `/api`; `LINK_LIMIT` 30/min on `/api/join/*` + `/api/view/*` (link
   guessing — tokens are 128-bit anyway). Over → 429 `rate_limited` + `Retry-After: 60`. Approximate, per Cloudflare
-  location. Service tokens (`svc:…`, test automation — users can't get one) skip only the link limit unless a test
-  sends `X-Test-Rate-Key` (prod suites probe dozens of view/join ids on purpose). With `DEV_IDENTITY` (local/tests)
+  location. Service tokens (`svc:…`, test automation — users can't get one) skip both limits unless a test sends
+  `X-Test-Rate-Key` (prod suites send 600+ requests a minute and probe dozens of view/join ids on purpose). With `DEV_IDENTITY` (local/tests)
   nothing is limited unless a test sends that header, which then is its own counter (parallel E2E workers share
   `dev@example.com`). For people the header changes nothing.
 - Read-only links: `GET /api/view/:viewId` is the only route keyed by the view id; it returns a trimmed snapshot

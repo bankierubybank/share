@@ -400,7 +400,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       splitStatus.classList.remove("error");
     } else {
       splitStatus.textContent = p.error;
-      splitStatus.classList.add("error");
+      // Not red before anything was typed: a fresh "Add bill" shouldn't open with an error.
+      splitStatus.classList.toggle("error", !(p.error === t("bill.err.amount") && !amount.value.trim()));
     }
   }
 

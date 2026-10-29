@@ -10,7 +10,7 @@ test("creator is marked 'You' and the trip is listed as mine on home", async ({ 
   await showPanel(page, "members");
   const ann = page.getByTestId("member-item").filter({ hasText: "Ann" });
   await expect(ann.getByTestId("member-you")).toBeVisible();
-  await expect(page.getByTestId("member-item").filter({ hasText: "Ben" }).getByTestId("member-email")).toContainText(/No email/);
+  await expect(page.getByTestId("member-item").filter({ hasText: "Ben" }).getByTestId("member-email")).toContainText(/Not joined yet/);
   await page.getByTestId("nav-home").click();
   await expect(page.getByTestId("trip-mine").filter({ hasText: name })).toBeVisible();
 });

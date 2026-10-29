@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.0 — 2026-10-28
+
+UI/UX review + revamp (owner: "review ui/ux — feel free to revamp").
+
+### Review findings (before)
+- The trip page never said where *you* stand: your balance and who you pay were only on Summary, and only after
+  picking yourself in "View as" — although the app already knows who you are (v0.4).
+- On a phone the first bill sat at the bottom of the first screen: a 4-bullet tips card and a lone "View as" box
+  came first. On laptops the right column (summary, stats, people, activity) ran ~3× longer than the bills.
+- "THB 17,430.00" everywhere; home said "group" while the rest said "trip"; returning users saw the create form
+  before their trips; three people in a row read "No email — can't open this trip"; a fresh Add bill opened with
+  a red "Enter an amount".
+
+### Changed
+- **Trip header** on every tab: "You get back ฿4,860.00" / "You owe …" / "You're all settled up", what you paid vs
+  your share, one row per payment involving you ("Fern pays you ฿3,580.00", "Pay Ploy ฿1,280.00") with **Settle**,
+  and trip total · bills · people. "View as" moved into it (the header then shows that person).
+- **Tips** are one slim line (tap to expand), so bills start on the first screen.
+- **Laptop layout**: two columns — bills + activity | summary + people.
+- **Money** uses the narrow symbol for the trip's currency (฿, $, €); foreign amounts on fx bills keep the code
+  (`USD 30.00 @ 36.25`) because narrow symbols are ambiguous.
+- **Home**: your trips first when you have some (shorter hero); copy says "trip" throughout (EN + TH).
+- People without a linked account show "Not joined yet" (the invite link sits right below).
+- Add bill: no red error until something invalid was typed.
+- Rounder cards, bolder amounts.
+
+### Fixed
+- Service tokens (test automation) now skip the API rate limit too unless a test opts in: the prod security suite
+  outgrew 600 requests/min and its first 0.7 run failed with 429s (ISSUES #40). People are limited as before.
+
 ## 0.6.0 — 2026-10-28
 
 Owner picks from round 3: #1 invite link, #16 rate limiting, #21 Firefox in the matrix.

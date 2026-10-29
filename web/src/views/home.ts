@@ -33,7 +33,7 @@ export function renderHome(root: HTMLElement) {
     dataset: { testid: "group-name" },
   }) as TextField;
 
-  const currency = h("md-outlined-select", { quick: true, label: t("home.currency"), dataset: { testid: "group-currency" } },
+  const currency = h("md-outlined-select", { quick: true, label: t("home.currency"), class: "currency-select", dataset: { testid: "group-currency" } },
     CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === defaultCurrency() }, h("div", { slot: "headline" }, c))),
   ) as HTMLElement & { value: string };
 
@@ -208,6 +208,9 @@ export function renderHome(root: HTMLElement) {
         );
   };
   let card = tripsCard();
+  const formCard = h("section", { class: "card new-trip" }, h("h2", { class: "md-typescale-title-medium" }, t("home.newGroup")), form);
+  // Coming back: your trips first. First visit: the form first, "how it works" next to it.
+  const returning = mergeTrips(lastMine, recentGroups()).length > 0;
 
   clear(
     root,
@@ -227,16 +230,11 @@ export function renderHome(root: HTMLElement) {
       { class: "page home", id: "main" },
       h(
         "section",
-        { class: "hero" },
+        { class: `hero ${returning ? "compact" : ""}` },
         h("h1", { class: "md-typescale-display-small" }, t("home.heroTitle")),
         h("p", { class: "md-typescale-body-large muted" }, t("home.heroText")),
       ),
-      h(
-        "div",
-        { class: "home-grid" },
-        h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, t("home.newGroup")), form),
-        card,
-      ),
+      h("div", { class: "home-grid" }, ...(returning ? [card, formCard] : [formCard, card])),
     ),
   );
 

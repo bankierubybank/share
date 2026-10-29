@@ -237,21 +237,8 @@ md-list { background: transparent; --md-list-container-color: transparent; }
 
 @media (min-width: 960px) {
   .group-tabs { display: none; }
-  .group-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
-    grid-template-areas: "banner banner" "toolbar toolbar" "bills summary" "bills members" "bills activity";
-    grid-template-rows: auto auto auto auto 1fr;
-    gap: 16px;
-    align-items: start;
-  }
+  .group-layout .cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 16px; align-items: start; }
   .group-layout .panel { display: block !important; }
-  .panel-bills { grid-area: bills; }
-  .panel-summary { grid-area: summary; }
-  .panel-members { grid-area: members; }
-  .panel-activity { grid-area: activity; }
-  .group-layout > .banner { grid-area: banner; }
-  .group-layout > .toolbar { grid-area: toolbar; }
 }
 
 .wide-only { display: none; }
@@ -358,10 +345,6 @@ details.more > summary { cursor: pointer; padding: 4px 0 12px; list-style: rever
   .bar-label { grid-area: label; } .bar-value { grid-area: value; } .bar-track { grid-area: track; }
 }
 
-.my-card { display: flex; flex-direction: column; gap: 4px; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
-.my-card.pos .md-typescale-headline-small { color: var(--positive); }
-.my-card.neg .md-typescale-headline-small { color: var(--negative); }
-.my-card .muted { color: inherit; opacity: 0.85; }
 md-list-item.dim { opacity: 0.55; }
 .balance-row.me { background: var(--md-sys-color-secondary-container); }
 
@@ -372,7 +355,6 @@ md-list-item.dim { opacity: 0.55; }
 
 .banner { display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; margin-bottom: 16px; border-radius: 12px;
   background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container); }
-.toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .view-as { min-width: 200px; }
 .danger-zone { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); }
 .danger-filled { --md-filled-button-container-color: var(--md-sys-color-error); --md-filled-button-label-text-color: var(--md-sys-color-on-error); }
@@ -435,9 +417,14 @@ md-outlined-select { min-width: 0; max-width: 100%; }
 .link-box { padding: 8px 12px; border-radius: 8px; background: var(--md-sys-color-surface-container-high); overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 
 /* tips (#17) */
-.tips { margin-bottom: 16px; padding: 12px 8px 12px 20px; }
-.tips ul { margin: 4px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
-@media (min-width: 960px) { .group-layout > .tips { grid-column: 1 / -1; } }
+.tips {
+  display: flex; align-items: flex-start; gap: 4px; margin-bottom: 12px; padding: 4px 4px 4px 16px; border-radius: 16px;
+  background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container);
+}
+.tips summary { display: flex; align-items: center; gap: 8px; min-height: 40px; cursor: pointer; list-style: none; }
+.tips summary::-webkit-details-marker { display: none; }
+.tips summary md-icon { --md-icon-size: 20px; }
+.tips ul { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 
 /* gestures (#16) */
 md-list-item[data-bill-id] { touch-action: pan-y; position: relative; }
@@ -475,3 +462,47 @@ md-list-item.saving { opacity: 0.7; }
   md-list-item.saving { animation: saving-pulse 1.2s ease-in-out infinite alternate; }
 }
 @keyframes saving-pulse { from { opacity: 0.55; } to { opacity: 0.85; } }
+
+/* ---------- v0.7 UI revamp ---------- */
+/* Trip header: your position + next steps, on every tab. */
+.trip-hero {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 16px; padding: 16px 16px 16px 20px; border-radius: 24px;
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container);
+}
+.hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.hero-who { opacity: 0.9; }
+.hero-net { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.trip-hero.pos .hero-net { color: var(--positive); }
+.trip-hero.neg .hero-net { color: var(--negative); }
+.hero-sub { opacity: 0.85; }
+.hero-actions { list-style: none; margin: 6px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.hero-actions li {
+  display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 6px 6px 6px 14px; border-radius: 16px;
+  background: var(--md-sys-color-surface-container-lowest); color: var(--md-sys-color-on-surface);
+}
+.hero-actions li md-icon { flex: none; --md-icon-size: 20px; color: var(--md-sys-color-primary); }
+.trip-hero .view-as {
+  min-width: 150px; max-width: 55%;
+  --md-outlined-field-top-space: 6px; --md-outlined-field-bottom-space: 6px;
+  --md-outlined-select-text-field-outline-color: var(--md-sys-color-on-primary-container);
+}
+@media (min-width: 960px) {
+  .trip-hero { flex-direction: column; padding: 20px 20px 20px 28px; }
+  .hero-actions { flex-direction: row; flex-wrap: wrap; }
+  .hero-actions li { flex: 1 1 280px; }
+}
+
+/* Cards and lists: a little rounder and calmer. */
+.card { border-radius: 20px; }
+md-list-item[data-testid="bill-item"] .bill-end .md-typescale-title-small { font-weight: 600; }
+.list-subheader { padding-top: 14px; }
+
+/* Home: returning users see their trips first under a shorter hero. */
+.hero.compact { padding: 12px 4px 16px; }
+.hero.compact h1 { font-size: 28px; line-height: 36px; }
+.hero.compact p { display: none; }
+@media (max-width: 599px) {
+  .hero h1 { font-size: 30px; line-height: 38px; }
+}
+.currency-select { min-width: 112px; }

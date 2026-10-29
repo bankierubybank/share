@@ -4,7 +4,7 @@
 export const LINK_ROUTE_RE = /^\/api\/(join|view)\//;
 
 export interface RatePlan {
-  /** Counter key; null = no limits at all (local dev / tests without the opt-in header). */
+  /** Counter key; null = no limits at all (service tokens / local tests without the opt-in header). */
   key: string | null;
   /** Also apply the stricter link limit. */
   link: boolean;
@@ -12,14 +12,15 @@ export interface RatePlan {
 
 /**
  * - People: keyed by their verified identity (IP when there is none); API limit always, link limit on link routes.
- * - Service tokens (`svc:…`, our test automation; users can't get one): link limit only when a test opts in with
- *   `X-Test-Rate-Key` — prod suites legitimately probe many view/join ids. The API limit still applies.
+ * - Service tokens (`svc:…`, our test automation; users can't get one): no limits unless a test opts in with
+ *   `X-Test-Rate-Key` — the prod suites send 600+ requests a minute and probe dozens of view/join ids on purpose
+ *   (ISSUES #37, #40). Opted in, they're counted under their own identity like a person.
  * - Local dev / tests (DEV_IDENTITY): nothing unless a test opts in; then keyed by that header (its own counter),
  *   so parallel E2E workers sharing one dev identity aren't throttled.
  */
 export function ratePlan(identity: string | null, ip: string | null, path: string, optInKey: string | null, dev: boolean): RatePlan {
   const linkRoute = LINK_ROUTE_RE.test(path);
   if (dev) return optInKey ? { key: `test:${optInKey}`, link: linkRoute } : { key: null, link: false };
-  const service = identity?.startsWith("svc:") ?? false;
-  return { key: identity ?? `ip:${ip ?? "unknown"}`, link: linkRoute && (!service || !!optInKey) };
+  if (identity?.startsWith("svc:") && !optInKey) return { key: null, link: false };
+  return { key: identity ?? `ip:${ip ?? "unknown"}`, link: linkRoute };
 }
