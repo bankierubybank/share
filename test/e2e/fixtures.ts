@@ -27,7 +27,7 @@ export const test = base.extend({
     await use(context);
     for (const gid of created) {
       // 404 = the test already deleted it.
-      await context.request.delete(`${origin}/api/groups/${gid}`, { headers: accessHeaders }).catch(() => undefined);
+      await context.request.delete(`${origin}/api/groups/${gid}?forever=1`, { headers: accessHeaders }).catch(() => undefined);
     }
   },
 });

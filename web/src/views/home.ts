@@ -242,9 +242,58 @@ export function renderHome(root: HTMLElement) {
           }, icon("local_activity", "icon"), t("home.trySample")),
         );
   };
+  /** Trips in the bin (v0.10): Restore for anyone in them; Delete forever (two taps) only when I'm alone in it. */
+  const binCard = (trips: Awaited<ReturnType<typeof api.deletedTrips>>["trips"]) => {
+    if (!trips.length) return h("div", { hidden: true });
+    const day = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: "numeric", month: "short" });
+    return h("section", { class: "card bin", dataset: { testid: "bin-card" }, "aria-labelledby": "bin-title" },
+      h("h2", { class: "md-typescale-title-medium", id: "bin-title" }, t("bin.title")),
+      h("p", { class: "md-typescale-body-small muted" }, t("bin.help")),
+      h("ul", { class: "spend-list" }, trips.map((g) => {
+        let armed = false;
+        const purge: HTMLElement = h("md-text-button", { class: "danger", dataset: { testid: "purge-trip" }, onclick: async () => {
+          if (!armed) {
+            armed = true;
+            purge.textContent = t("bin.purgeConfirm");
+            return;
+          }
+          try {
+            await api.deleteGroup(g.id, true);
+            snackbar(t("bin.purged", { name: g.name }));
+            renderHome(root);
+          } catch (e) {
+            snackbar(e instanceof Error ? e.message : t("common.deleteFailed"));
+          }
+        } }, t("bin.purge")) as HTMLElement;
+        return h("li", { dataset: { testid: "bin-trip" } },
+          h("div", { class: "stack-xs" },
+            h("span", { class: "md-typescale-body-large" }, g.name),
+            h("span", { class: "md-typescale-body-small muted" }, t("bin.line", { date: day(g.deletedAt), until: day(g.purgeAt) }))),
+          h("div", { class: "row" },
+            g.alone && purge,
+            h("md-outlined-button", { dataset: { testid: "restore-trip" }, onclick: async () => {
+              try {
+                await api.restoreGroup(g.id);
+                snackbar(t("bin.restored", { name: g.name }));
+                navigate(`/g/${g.id}`);
+              } catch (e) {
+                snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
+              }
+            } }, t("bin.restore"))));
+      })));
+  };
+
   let card = tripsCard();
   let spend = spendingCard();
-  const tripsCol = h("div", { class: "stack-lg" }, card, spend);
+  let bin: HTMLElement = h("div", { hidden: true });
+  const tripsCol = h("div", { class: "stack-lg" }, card, spend, bin);
+  // Separate and last: the bin is rarely used and must never hold up the trip list.
+  void api.deletedTrips().then(({ trips }) => {
+    if (!bin.isConnected) return;
+    const next = binCard(trips);
+    bin.replaceWith(next);
+    bin = next;
+  }, () => undefined);
   const formCard = h("section", { class: "card new-trip" }, h("h2", { class: "md-typescale-title-medium" }, t("home.newGroup")), form);
   // Coming back: your trips first. First visit: the form first, "how it works" next to it.
   const returning = mergeTrips(lastMine, recentGroups()).length > 0;

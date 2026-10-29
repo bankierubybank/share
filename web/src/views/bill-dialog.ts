@@ -616,14 +616,14 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     }
     const list = comments;
     const input = h("md-outlined-text-field", {
-      type: "textarea", rows: 2, label: opts.viewAs ? t("bill.commentAs", { name: nameOf(opts.viewAs) ?? "" }) : t("bill.commentAdd"), maxLength: 500,
+      type: "textarea", rows: 2, label: t("bill.commentAdd"), maxLength: 500,
       dataset: { testid: "comment-input" },
     }) as Field;
     const post = h("md-filled-tonal-button", { type: "button", dataset: { testid: "comment-post" }, onclick: async () => {
       const text = input.value.trim();
       if (!text) return;
       try {
-        await api.addComment(gid, bill.id, text, opts.viewAs ?? null);
+        await api.addComment(gid, bill.id, text);
         changed = true;
         loadComments();
       } catch (e) {

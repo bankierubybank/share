@@ -54,9 +54,10 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 
 ## Data model (D1 / SQLite)
 
-- `groups(id PK, name, currency, archived_at, created_at, budget)` — `budget` (0006): optional trip budget, minor units
+- `groups(id PK, name, currency, archived_at, created_at, budget)` — `budget` (0006): optional trip budget, minor units; `deleted_at` (0007): in the bin since (30 days, then the daily job removes it)
 - `members(id PK, group_id FK, name, promptpay, email, position, created_at)` unique `(group_id, lower(name))`,
   unique `(group_id, email)` where set; index on `email` (my trips). `email` = linked identity (0004).
+  `seen_at` (0007): when that identity first opened the trip — after that only they can change `email`.
 - `bills(id PK, group_id FK, kind, description, amount, paid_by FK (first payer), date, split_mode, split_json,
   category, original_currency, original_amount, fx_rate, receipt_key, recurrence_id, created_by, deleted_at, created_at, updated_at,
   client_ref)` — `client_ref` (0006): retry key of offline-queued creates, unique `(group_id, client_ref)` where set
@@ -147,6 +148,10 @@ batches far more (ISSUES #28). Rules:
   Pre-0.4 trips (nobody linked) are claimed by their first visitor (`POST …/me`, guarded against a race), after
   which they're locked too. The 22-char group id stays unguessable, but is no longer sufficient by itself.
   Move/merge check membership in both trips (404 otherwise). The last link can't be removed (no orphaned trips).
+- Members are equals (v0.10 limits on what one of them can do to the others): deleting a trip only bins it for
+  30 days (any member restores; "forever" only when you're the only one linked); someone's sign-in email can't be
+  changed by others once they've opened the trip; comments are always by the caller. Still possible for any member:
+  removing a person who isn't on any bill (that cuts their access) — they're on bills in any real trip.
 - Every member/bill lookup is scoped by `group_id` (no cross-group IDOR).
 - Headers: strict CSP (`'self'` only — fonts/icons self-hosted, no third parties), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
   (group ids live in URLs), `X-Content-Type-Options: nosniff`, HSTS, Permissions-Policy. Set by the Worker on

@@ -25,7 +25,7 @@ test("home shows my position per trip and my spending this month", async ({ page
     const as = { headers: { "cf-access-authenticated-user-email": email } };
     const mine = (await (await ctx.request.get("/api/me/groups", as)).json()).groups as { id: string }[];
     expect(mine).toHaveLength(1);
-    for (const g of mine) await ctx.request.delete(`/api/groups/${g.id}`, as);
+    for (const g of mine) await ctx.request.delete(`/api/groups/${g.id}?forever=1`, as);
     await ctx.close();
   } else {
     await expect(spend).toBeVisible(); // prod: one service identity, parallel tests' trips add up

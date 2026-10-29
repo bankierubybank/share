@@ -220,11 +220,11 @@ describe("archive / unarchive", () => {
 });
 
 describe("delete group", () => {
-  it("204 then 404 everywhere; second delete 404", async () => {
+  it("forever: 204 then 404 everywhere; second delete 404", async () => {
     const { gid } = await makeGroup();
-    expect((await call("DELETE", `/api/groups/${gid}`)).status).toBe(204);
+    expect((await call("DELETE", `/api/groups/${gid}?forever=1`)).status).toBe(204);
     for (const p of ["", "/summary", "/activity", "/recurring"]) expect((await call("GET", `/api/groups/${gid}${p}`)).status, p).toBe(404);
-    expect((await call("DELETE", `/api/groups/${gid}`)).status).toBe(404);
+    expect((await call("DELETE", `/api/groups/${gid}?forever=1`)).status).toBe(404);
   });
 
   it("removes receipts from R2 and cascades every child row", async () => {
@@ -243,7 +243,7 @@ describe("delete group", () => {
     });
     expect(await receiptCount(gid)).toBe(3);
 
-    expect((await call("DELETE", `/api/groups/${gid}`)).status).toBe(204);
+    expect((await call("DELETE", `/api/groups/${gid}?forever=1`)).status).toBe(204);
     expect(await receiptCount(gid)).toBe(0);
     for (const t of ["members", "bills", "activity", "recurrences"]) {
       const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE group_id = ?`).bind(gid).first<{ n: number }>();

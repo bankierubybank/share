@@ -30,6 +30,10 @@ export interface GroupAccess {
   meId: string | null;
   /** Some member is linked; false for trips created before v0.4 until someone claims them. */
   claimed: boolean;
+  /** Set while the trip is in the bin (v0.10). */
+  deletedAt: string | null;
+  /** The caller has opened this trip before (members.seen_at set). */
+  seen: boolean;
 }
 export interface Bill {
   id: string;
@@ -134,7 +138,7 @@ export async function createGroup(
   const r = await db.batch([
     db.prepare("INSERT INTO groups (id, name, currency) VALUES (?, ?, ?)").bind(gid, name, currency),
     ...members.map((m, i) =>
-      db.prepare("INSERT INTO members (id, group_id, name, position, email) VALUES (?, ?, ?, ?, ?)").bind(m.id, gid, m.name, i, m.email),
+      db.prepare(`INSERT INTO members (id, group_id, name, position, email, seen_at) VALUES (?, ?, ?, ?, ?, ${m.email ? NOW : "NULL"})`).bind(m.id, gid, m.name, i, m.email),
     ),
     logActivity(db, gid, actor, "group.create", gid, { name, members: memberNames.length }),
     db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid),
@@ -142,8 +146,9 @@ export async function createGroup(
   return { group: toGroup((r[r.length - 1].results as GroupRow[])[0]), members };
 }
 
+/** A live trip (not in the bin). */
 export async function getGroup(db: D1Database, gid: string): Promise<Group | null> {
-  const r = await db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid).first<GroupRow>();
+  const r = await db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ? AND deleted_at IS NULL`).bind(gid).first<GroupRow>();
   return r ? toGroup(r) : null;
 }
 
@@ -151,14 +156,19 @@ export async function getGroup(db: D1Database, gid: string): Promise<Group | nul
 export async function getGroupAccess(db: D1Database, gid: string, identity: string): Promise<GroupAccess | null> {
   const r = await db
     .prepare(
-      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget,
-         (SELECT id FROM members WHERE group_id = g.id AND email = ?2) AS me_id,
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, g.deleted_at,
+         m.id AS me_id, m.seen_at AS me_seen,
          EXISTS (SELECT 1 FROM members WHERE group_id = g.id AND email IS NOT NULL) AS claimed
-       FROM groups g WHERE g.id = ?1`,
+       FROM groups g LEFT JOIN members m ON m.group_id = g.id AND m.email = ?2 WHERE g.id = ?1`,
     )
     .bind(gid, identity)
-    .first<GroupRow & { me_id: string | null; claimed: number }>();
-  return r ? { group: toGroup(r), meId: r.me_id, claimed: r.claimed === 1 } : null;
+    .first<GroupRow & { deleted_at: string | null; me_id: string | null; me_seen: string | null; claimed: number }>();
+  return r ? { group: toGroup(r), meId: r.me_id, claimed: r.claimed === 1, deletedAt: r.deleted_at, seen: r.me_seen !== null } : null;
+}
+
+/** First visit of a linked person: from now on only they can change their sign-in email. */
+export async function markSeen(db: D1Database, gid: string, mid: string) {
+  await db.prepare(`UPDATE members SET seen_at = ${NOW} WHERE id = ? AND group_id = ? AND seen_at IS NULL`).bind(mid, gid).run();
 }
 
 export async function isLinked(db: D1Database, gid: string, identity: string): Promise<boolean> {
@@ -170,7 +180,7 @@ export async function groupsFor(db: D1Database, identity: string): Promise<MyGro
   const { results } = await db
     .prepare(
       `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, m.id AS member_id, m.name AS member_name
-       FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? ORDER BY g.created_at DESC LIMIT 200`,
+       FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? AND g.deleted_at IS NULL ORDER BY g.created_at DESC LIMIT 200`,
     )
     .bind(identity)
     .all<GroupRow & { member_id: string; member_name: string }>();
@@ -196,14 +206,14 @@ export async function linkMe(
   if (meId === null) {
     // Claim: only while nobody is linked, so two first visitors can't both get in.
     const r = await db
-      .prepare("UPDATE members SET email = ?1 WHERE id = ?2 AND group_id = ?3 AND NOT EXISTS (SELECT 1 FROM members WHERE group_id = ?3 AND email IS NOT NULL)")
+      .prepare(`UPDATE members SET email = ?1, seen_at = ${NOW} WHERE id = ?2 AND group_id = ?3 AND NOT EXISTS (SELECT 1 FROM members WHERE group_id = ?3 AND email IS NOT NULL)`)
       .bind(identity, mid, gid)
       .run();
     if (!r.meta.changes) return "race";
   } else {
     await db.batch([
-      db.prepare("UPDATE members SET email = NULL WHERE id = ? AND group_id = ?").bind(meId, gid),
-      db.prepare("UPDATE members SET email = ? WHERE id = ? AND group_id = ? AND email IS NULL").bind(identity, mid, gid),
+      db.prepare("UPDATE members SET email = NULL, seen_at = NULL WHERE id = ? AND group_id = ?").bind(meId, gid),
+      db.prepare(`UPDATE members SET email = ?, seen_at = ${NOW} WHERE id = ? AND group_id = ? AND email IS NULL`).bind(identity, mid, gid),
     ]);
   }
   await logActivity(db, gid, actor, "member.link", mid, { name: target.name }).run();
@@ -233,6 +243,48 @@ export async function updateGroup(
   const r = await db.batch([...stmts, db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid)]);
   const row = (r[r.length - 1].results as GroupRow[])[0];
   return row ? toGroup(row) : null;
+}
+
+/** Moves the trip to the bin (v0.10): hidden everywhere, restorable for BIN_DAYS. False if already there. */
+export async function binGroup(db: D1Database, gid: string, actor: string | null): Promise<boolean> {
+  const [upd] = await db.batch([
+    db.prepare(`UPDATE groups SET deleted_at = ${NOW} WHERE id = ? AND deleted_at IS NULL`).bind(gid),
+    db.prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'group.delete', NULL, NULL WHERE changes() > 0")
+      .bind(entityId(), gid, actor),
+  ]);
+  return upd.meta.changes > 0;
+}
+
+export async function restoreGroup(db: D1Database, gid: string, actor: string | null): Promise<Group | null> {
+  const r = await db.batch([
+    db.prepare("UPDATE groups SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL").bind(gid),
+    db.prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'group.restore', NULL, NULL WHERE changes() > 0")
+      .bind(entityId(), gid, actor),
+    db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid),
+  ]);
+  const row = (r[2].results as GroupRow[])[0];
+  return r[0].meta.changes && row ? toGroup(row) : null;
+}
+
+/** Trips of mine in the bin, newest first; `alone` = I'm the only one linked (I may delete it for good now). */
+export async function binnedGroupsFor(db: D1Database, identity: string) {
+  const { results } = await db
+    .prepare(
+      `SELECT g.id, g.name, g.currency, g.deleted_at,
+         (SELECT COUNT(*) FROM members x WHERE x.group_id = g.id AND x.email IS NOT NULL) AS linked
+       FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? AND g.deleted_at IS NOT NULL ORDER BY g.deleted_at DESC LIMIT 100`,
+    )
+    .bind(identity)
+    .all<{ id: string; name: string; currency: string; deleted_at: string; linked: number }>();
+  return results.map((r) => ({ id: r.id, name: r.name, currency: r.currency, deletedAt: r.deleted_at, alone: r.linked <= 1 }));
+}
+
+/** Ids of trips in the bin for more than `days` (the daily purge). */
+export async function expiredBinnedGroups(db: D1Database, days: number): Promise<string[]> {
+  const { results } = await db
+    .prepare(`SELECT id FROM groups WHERE deleted_at IS NOT NULL AND deleted_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${Math.floor(days)} days') LIMIT 200`)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
 }
 
 /** Hard delete (cascades). Returns receipt keys so the caller can remove them from R2. */
@@ -282,7 +334,8 @@ export async function updateMember(
     email: patch.email === undefined ? before.email : patch.email,
   };
   const stmts = [
-    db.prepare("UPDATE members SET name = ?, promptpay = ?, email = ? WHERE id = ? AND group_id = ?").bind(after.name, after.promptpay, after.email, mid, gid),
+    db.prepare("UPDATE members SET name = ?, promptpay = ?, email = ?, seen_at = CASE WHEN email IS ? THEN seen_at ELSE NULL END WHERE id = ? AND group_id = ?")
+      .bind(after.name, after.promptpay, after.email, after.email, mid, gid),
   ];
   if (after.name !== before.name) stmts.push(logActivity(db, gid, actor, "member.rename", mid, { from: before.name, to: after.name }));
   if (after.promptpay !== before.promptpay) stmts.push(logActivity(db, gid, actor, "member.promptpay", mid, { name: after.name, set: after.promptpay !== null }));
@@ -294,6 +347,13 @@ export async function updateMember(
 
 export async function getMember(db: D1Database, gid: string, mid: string): Promise<Member | null> {
   return db.prepare("SELECT id, name, promptpay, email FROM members WHERE id = ? AND group_id = ?").bind(mid, gid).first<Member>();
+}
+
+/** Whether `mid`'s sign-in email is theirs: linked AND that person has opened the trip (v0.10). */
+export async function emailLocked(db: D1Database, gid: string, mid: string): Promise<{ name: string; email: string | null; locked: boolean } | null> {
+  const r = await db.prepare("SELECT name, email, seen_at FROM members WHERE id = ? AND group_id = ?").bind(mid, gid)
+    .first<{ name: string; email: string | null; seen_at: string | null }>();
+  return r ? { name: r.name, email: r.email, locked: r.email !== null && r.seen_at !== null } : null;
 }
 
 /** In use = on a live bill (payer or share) or in an active recurring template. Soft-deleted bills don't count. */
@@ -636,7 +696,7 @@ export async function dueRecurrences(db: D1Database, today: string, gid?: string
   const { results } = await db
     .prepare(
       `SELECT r.* FROM recurrences r JOIN groups g ON g.id = r.group_id
-       WHERE r.active = 1 AND r.next_date <= ? AND g.archived_at IS NULL${gid ? " AND r.group_id = ?" : ""} ORDER BY r.next_date LIMIT 100`,
+       WHERE r.active = 1 AND r.next_date <= ? AND g.archived_at IS NULL AND g.deleted_at IS NULL${gid ? " AND r.group_id = ?" : ""} ORDER BY r.next_date LIMIT 100`,
     )
     .bind(...(gid ? [today, gid] : [today]))
     .all<RecRow>();

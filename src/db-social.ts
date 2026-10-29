@@ -116,7 +116,7 @@ export async function setViewId(db: D1Database, gid: string, on: boolean, actor:
 }
 
 export async function groupIdByViewId(db: D1Database, vid: string): Promise<string | null> {
-  const r = await db.prepare("SELECT id FROM groups WHERE view_id = ?").bind(vid).first<{ id: string }>();
+  const r = await db.prepare("SELECT id FROM groups WHERE view_id = ? AND deleted_at IS NULL").bind(vid).first<{ id: string }>();
   return r?.id ?? null;
 }
 

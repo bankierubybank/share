@@ -205,7 +205,7 @@ test("onboarding: sample data + dismissible tips (#17)", async ({ browser, baseU
   await expect(page.getByTestId("group-title")).toHaveText("Sample trip");
   await expect(page.getByTestId("tips")).toHaveCount(0);
   // ctx.request skips the context's routes: send the identity, or it runs as the dev user (not in this trip).
-  expect((await ctx.request.delete(`/api/groups/${page.url().split("/g/")[1]}`, { headers: { "cf-access-authenticated-user-email": email } })).status()).toBe(204);
+  expect((await ctx.request.delete(`/api/groups/${page.url().split("/g/")[1]}?forever=1`, { headers: { "cf-access-authenticated-user-email": email } })).status()).toBe(204);
   await ctx.close();
 });
 

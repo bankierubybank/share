@@ -125,7 +125,9 @@ describe("comments", () => {
     });
     const b = await postComment(gid, bid, "second");
     const c = await postComment(gid, bid, "third", ids.Bob);
-    expect(b.json.comment.authorMemberId).toBeNull();
+    // v0.10: always the signed-in person (dev@example.com = Alice), whatever memberId says.
+    expect(b.json.comment.authorMemberId).toBe(ids.Alice);
+    expect(c.json.comment.authorMemberId).toBe(ids.Alice);
     // Force distinct, known timestamps (same-millisecond inserts would tie-break on random ids).
     const stamp = (id: string, t: string) => env.DB.prepare("UPDATE bill_comments SET created_at = ? WHERE id = ?").bind(t, id).run();
     await stamp(c.json.comment.id, "2030-01-01T00:00:01.000Z");
@@ -282,8 +284,10 @@ describe("comments", () => {
   it("deleting the author member (not on any bill) keeps the comment with authorMemberId null; members on bills cannot be removed", async () => {
     const { gid, ids } = await makeGroup(["Alice", "Bob", "Carol", "Dave"]);
     const bid = await simpleBill(gid, ids);
-    const byDave = (await postComment(gid, bid, "from dave", ids.Dave)).json.comment.id;
-    const byAlice = (await postComment(gid, bid, "from alice", ids.Alice)).json.comment.id;
+    // Dave posts as himself (his own sign-in), then is removed.
+    expect((await call("PATCH", `/api/groups/${gid}/members/${ids.Dave}`, { email: "dave@x.io" })).status).toBe(200);
+    const byDave = (await call("POST", cPath(gid, bid), { body: "from dave" }, { "Cf-Access-Authenticated-User-Email": "dave@x.io" })).json.comment.id;
+    const byAlice = (await postComment(gid, bid, "from alice")).json.comment.id;
     expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Alice}`)).status).toBe(409);
     expect((await call("DELETE", `/api/groups/${gid}/members/${ids.Dave}`)).status).toBe(204);
     const list = (await call("GET", cPath(gid, bid))).json.comments as any[];
@@ -297,7 +301,7 @@ describe("comments", () => {
     const bid = await simpleBill(gid, ids);
     await postComment(gid, bid, "x");
     await call("POST", `/api/groups/${gid}/subgroups`, { name: "S", memberIds: [ids.Alice] });
-    expect((await call("DELETE", `/api/groups/${gid}`)).status).toBe(204);
+    expect((await call("DELETE", `/api/groups/${gid}?forever=1`)).status).toBe(204);
     for (const t of ["bill_comments", "subgroups"]) {
       const n = await env.DB.prepare(`SELECT COUNT(*) n FROM ${t} WHERE group_id = ?`).bind(gid).first<{ n: number }>();
       expect(n!.n, t).toBe(0);
@@ -546,8 +550,10 @@ describe("read-only view links", () => {
   it("deleting the group kills its view link", async () => {
     const { gid } = await makeGroup();
     const vid = (await call("POST", vlPath(gid), {})).json.viewId;
-    await call("DELETE", `/api/groups/${gid}`);
+    await call("DELETE", `/api/groups/${gid}`); // to the bin: the link stops working there too (v0.10)
     expect((await view(vid)).status).toBe(404);
+    expect((await call("POST", `/api/groups/${gid}/restore`, {})).status).toBe(200);
+    expect((await view(vid)).status).toBe(200);
   });
 
   it("archived group: view still works, revoke is allowed (204), create/rotate and other writes are 409", async () => {
@@ -784,8 +790,8 @@ describe("move a bill to another group", () => {
     const A = await makeGroup();
     const B = await makeGroup(["Alice", "Bob", "Carol"]);
     const bid = await simpleBill(A.gid, A.ids);
-    await postComment(A.gid, bid, "first", A.ids.Alice);
-    await postComment(A.gid, bid, "second", A.ids.Bob);
+    await postComment(A.gid, bid, "first");
+    await postComment(A.gid, bid, "second");
     await postComment(A.gid, bid, "third");
     expect((await move(A.gid, bid, B.gid)).status).toBe(200);
     const list = (await call("GET", cPath(B.gid, bid))).json.comments as any[];
@@ -1054,7 +1060,7 @@ describe("backup covers v3 tables", () => {
     expect(rows).toBe(total);
 
     const comment = file.tables.bill_comments.find((c: any) => c.id === cid);
-    expect(comment).toMatchObject({ bill_id: bid, group_id: gid, author_member_id: ids.Bob, body: "backed up" });
+    expect(comment).toMatchObject({ bill_id: bid, group_id: gid, author_member_id: ids.Alice, body: "backed up" });
     const sg = file.tables.subgroups.find((s: any) => s.id === sid);
     expect(sg).toMatchObject({ group_id: gid, name: "Duo" });
     expect(JSON.parse(sg.member_ids)).toEqual([ids.Alice, ids.Bob]);

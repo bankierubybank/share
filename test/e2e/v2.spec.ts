@@ -174,7 +174,9 @@ test("delete group requires typing its name (#1)", async ({ page }) => {
   await page.getByTestId("delete-confirm").click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("group-name")).toBeVisible(); // home
-  await expect(page.locator("main")).not.toContainText(name);
+  await expect(page.getByTestId("recent-groups").filter({ hasText: name })).toHaveCount(0);
+  // v0.10: it's in the bin, not gone.
+  await expect(page.getByTestId("bin-trip").filter({ hasText: name })).toBeVisible();
 });
 
 test("PromptPay QR when settling in THB (#13)", async ({ page }) => {

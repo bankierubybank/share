@@ -46,7 +46,7 @@ interface InviteRow { id: string; name: string; currency: string; archived_at: s
 /** The trip behind a live (not expired) invite token, or null. */
 export async function groupByInvite(db: D1Database, token: string): Promise<(Group & { expiresAt: string }) | null> {
   const r = await db
-    .prepare("SELECT id, name, currency, archived_at, created_at, budget, invite_expires FROM groups WHERE invite_hash = ?")
+    .prepare("SELECT id, name, currency, archived_at, created_at, budget, invite_expires FROM groups WHERE invite_hash = ? AND deleted_at IS NULL")
     .bind(await hashToken(token))
     .first<InviteRow>();
   if (!r || r.invite_expires <= new Date().toISOString()) return null;
@@ -59,7 +59,7 @@ export async function joinAs(db: D1Database, gid: string, mid: string, identity:
   if (!target) return "not_found";
   if (target.email !== null) return "taken";
   const [upd] = await db.batch([
-    db.prepare("UPDATE members SET email = ? WHERE id = ? AND group_id = ? AND email IS NULL").bind(identity, mid, gid),
+    db.prepare("UPDATE members SET email = ?, seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND group_id = ? AND email IS NULL").bind(identity, mid, gid),
     db
       .prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'member.join', ?, json_object('name', ?) WHERE changes() > 0")
       .bind(entityId(), gid, actor, mid, target.name),
@@ -73,7 +73,7 @@ export async function joinAsNew(db: D1Database, gid: string, name: string, ident
   await db.batch([
     db
       .prepare(
-        "INSERT INTO members (id, group_id, name, email, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM members WHERE group_id = ?))",
+        "INSERT INTO members (id, group_id, name, email, position, seen_at) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM members WHERE group_id = ?), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
       )
       .bind(id, gid, name, identity, gid),
     logActivity(db, gid, actor, "member.join", id, { name, added: true }),

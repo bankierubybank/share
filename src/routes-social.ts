@@ -20,7 +20,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
   /** The other trip of a move/merge: must exist AND have the caller linked (else it looks like it doesn't exist). */
   const otherGroup = async (c: GCtx, gid: string) => {
     const access = await db.getGroupAccess(c.env.DB, gid, c.get("identity")!);
-    return access?.meId ? access.group : null;
+    return access?.meId && !access.deletedAt ? access.group : null; // a trip in the bin is gone for this too
   };
   const gidOf = (c: GCtx) => c.get("group").id;
   const memberIds = async (c: GCtx) => new Set((await db.listMembers(c.env.DB, gidOf(c))).map((m) => m.id));
@@ -42,7 +42,8 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     const input = parseComment(await readJson(c), await memberIds(c));
     if ((await social.countComments(c.env.DB, bill.id)) >= SOCIAL_LIMITS.commentsPerBill)
       return apiError(c, 409, "conflict", `at most ${SOCIAL_LIMITS.commentsPerBill} comments per bill`);
-    const comment = await social.addComment(c.env.DB, gidOf(c), bill.id, input.body, input.authorMemberId, actor(c), bill.description);
+    // Always the signed-in person (v0.10): "View as" changes what you see, never who you post as.
+    const comment = await social.addComment(c.env.DB, gidOf(c), bill.id, input.body, c.get("me"), actor(c), bill.description);
     return c.json({ comment }, 201);
   });
 

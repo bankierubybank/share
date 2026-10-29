@@ -66,6 +66,9 @@ export class ApiError extends Error {
   }
 }
 
+/** Window event: the Access session expired (main.ts shows a "sign in again" bar). */
+export const SIGNED_OUT = "share:signed-out";
+
 async function req<T>(method: string, path: string, body?: unknown, raw?: { body: Blob; type: string }): Promise<T> {
   let res: Response;
   try {
@@ -74,9 +77,17 @@ async function req<T>(method: string, path: string, body?: unknown, raw?: { body
       headers: raw ? { "Content-Type": raw.type } : body === undefined ? {} : { "Content-Type": "application/json" },
       body: raw ? raw.body : body === undefined ? undefined : JSON.stringify(body),
       credentials: "same-origin",
+      // An expired Cloudflare Access session answers with a redirect to its sign-in page. Followed, that ends in a
+      // CORS failure that looks exactly like being offline (and would queue bills offline); not followed, it's
+      // recognizable.
+      redirect: "manual",
     });
   } catch {
     throw new ApiError(0, "network", "Network error — check your connection");
+  }
+  if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400) || res.status === 401) {
+    window.dispatchEvent(new Event(SIGNED_OUT));
+    throw new ApiError(401, "signed_out", "Your sign-in has expired — reload the page to sign in again");
   }
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
@@ -113,7 +124,11 @@ export const api = {
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
   updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null }) =>
     req<{ group: Group }>("PATCH", g(gid), patch),
-  deleteGroup: (gid: string) => req<void>("DELETE", g(gid)),
+  /** To the bin (v0.10); `forever` = gone at once, allowed only when I'm the only one linked (409 others_linked). */
+  deleteGroup: (gid: string, forever = false) => req<void>("DELETE", `${g(gid)}${forever ? "?forever=1" : ""}`),
+  restoreGroup: (gid: string) => req<{ group: Group }>("POST", `${g(gid)}/restore`, {}),
+  /** My trips in the bin; `alone` = I may delete it for good now. */
+  deletedTrips: () => req<{ trips: { id: string; name: string; currency: string; deletedAt: string; purgeAt: string; alone: boolean }[] }>("GET", "/me/deleted"),
   addMember: (gid: string, name: string, promptpay?: string | null, email?: string | null) =>
     req<{ member: Member }>("POST", `${g(gid)}/members`, { name, ...(promptpay ? { promptpay } : {}), ...(email ? { email } : {}) }),
   updateMember: (gid: string, mid: string, patch: { name?: string; promptpay?: string | null; email?: string | null }) =>
@@ -136,8 +151,8 @@ export const api = {
     req<{ recurring: Recurrence; created: number }>("POST", `${g(gid)}/recurring`, { frequency, startDate, bill }),
   stopRecurring: (gid: string, rid: string) => req<void>("DELETE", `${g(gid)}/recurring/${encodeURIComponent(rid)}`),
   comments: (gid: string, bid: string) => req<{ comments: Comment[] }>("GET", `${b(gid, bid)}/comments`),
-  addComment: (gid: string, bid: string, body: string, memberId?: string | null) =>
-    req<{ comment: Comment }>("POST", `${b(gid, bid)}/comments`, { body, ...(memberId ? { memberId } : {}) }),
+  /** Posted as the signed-in person (v0.10). */
+  addComment: (gid: string, bid: string, body: string) => req<{ comment: Comment }>("POST", `${b(gid, bid)}/comments`, { body }),
   deleteComment: (gid: string, bid: string, cid: string) => req<void>("DELETE", `${b(gid, bid)}/comments/${encodeURIComponent(cid)}`),
   subgroups: (gid: string) => req<{ subgroups: Subgroup[] }>("GET", `${g(gid)}/subgroups`),
   saveSubgroup: (gid: string, sub: { id?: string; name: string; memberIds: string[] }) =>

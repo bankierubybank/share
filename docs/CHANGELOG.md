@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.10.0 — 2026-10-29
+
+Fixes from the code review (owner picked 1–4).
+
+### Deleted trips go to a 30-day bin (review #3)
+- Deleting a trip now moves it to **Recently deleted** on home for 30 days; anyone in it can **Restore** it (home,
+  the trip's own page, or Undo right after deleting). The daily job removes it for good after 30 days, with its
+  receipts. While binned it is invisible everywhere else: my trips, home overview, invite and view links, move/merge,
+  repeating bills.
+- **Delete forever** (two taps, in the bin) only for someone alone in the trip — nobody can wipe a trip other people
+  use. API: `DELETE /groups/:gid` (bin), `DELETE /groups/:gid?forever=1` (409 `others_linked` if others are linked),
+  `POST /groups/:gid/restore`, `GET /api/me/deleted`; a binned trip answers `410 trip_deleted` to its people.
+
+### A sign-in email is yours once you've opened the trip (review #3)
+- Others can still fix or remove an email they typed for someone **until that person opens the trip**; after that
+  only they can change it (`403 email_locked`). Joining by invite link or claiming a seat locks it at once; existing
+  links were treated as opened. Migration `0007_trip_bin` (`groups.deleted_at`, `members.seen_at`).
+
+### Comments are always by the signed-in person (review #4)
+- The server ignores `memberId` on new comments and uses the caller's own person: "View as" changes what you see,
+  never who you post as. The "Comment as …" label is gone.
+
+### Expired sign-in ≠ offline (review #2)
+- API calls no longer follow redirects: Cloudflare Access's sign-in redirect (or a 401) now shows "Your sign-in has
+  expired · Sign in again" instead of looking like a network error — so bills are no longer queued as "offline".
+  Queued bills wait (not dropped) while signed out.
+
+### Budget + currency switch (review #1)
+- Switching a trip's currency in Settings no longer fails ("Enter an amount above zero") when it has a budget, e.g.
+  THB → JPY. An untouched budget keeps its stored amount, like every bill; typing a new one reads it in the new
+  currency.
+
+### Also fixed
+- Move/merge could target a trip in the bin (found while writing the bin tests).
+
 ## 0.9.0 — 2026-10-29
 
 Owner picks from the backlog: #4, #6, #8, #10, #12, #17.

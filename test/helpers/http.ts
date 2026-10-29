@@ -57,9 +57,9 @@ export async function apiBytes(method: string, path: string, body?: Uint8Array, 
   return { status: res.status, headers: res.headers, bytes, json, text: json ? new TextDecoder().decode(bytes) : "" };
 }
 
-/** Hard-deletes a group (and its receipts). */
+/** Hard-deletes a group (and its receipts): `forever` — tests act alone in their trips (v0.10). */
 export async function deleteGroup(gid: string) {
-  return api("DELETE", `/api/groups/${gid}`);
+  return api("DELETE", `/api/groups/${gid}?forever=1`);
 }
 
 /** Deletes every group created in this process (call from afterAll). Never throws. */

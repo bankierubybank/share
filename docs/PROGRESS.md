@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.9.0 (budgets, reminders, offline bills, summary image) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 73db0902)
+## Status: v0.10.0 (review fixes: trip bin, email lock, sign-in expiry) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 3ed6b953)
 
-Local 2026-10-29 (0.9.0): unit 174, integration 192, system 36, security 118 (+2 prod-only), E2E 278 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
-Prod 2026-10-29 (73db0902): system 36, security 112 (+8 local-only), E2E 128 (+12 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0006 applied (backup `.tmp/prod-before-0006.sql`, local only).
+Local 2026-10-29 (0.10.0): unit 197, integration 199, system 36, security 118 (+2 prod-only), E2E 294 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
+Prod 2026-10-29 (3ed6b953): system 36, security 112 (+8 local-only), E2E 136 (+12 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0007 applied (backup `.tmp/prod-before-0007.sql`, local only).
 
 | Area | State |
 |------|-------|
@@ -121,6 +121,16 @@ Prod 2026-10-29 (73db0902): system 36, security 112 (+8 local-only), E2E 128 (+1
 | 10 | Summary image | ✅ canvas PNG: preview, download, share |
 | 12 | Undo instead of confirm | ✅ bill delete (no confirm), comments (inline undo), subgroups |
 | 17 | Firefox bundle cache (ISSUES #43) | ✅ worker precaches on install; green on CI Firefox |
+
+## v0.10 status (code review fixes)
+
+| # | Item | State |
+|---|------|-------|
+| 1 | Budget vs currency switch | ✅ (ISSUES #47) |
+| 2 | Expired sign-in looked like offline | ✅ (ISSUES #48) |
+| 3 | Trip bin (30 days) + email locked once opened | ✅ (ISSUES #49, #51) |
+| 4 | Comments by the signed-in person | ✅ (ISSUES #50) |
+| 5–16 | Rest of the review | open — ISSUES #52 |
 
 ## Next ideas (backlog)
 - Not picked yet: email autocomplete, live FX rates, receipt scan (Workers AI), bill templates, import

@@ -67,7 +67,9 @@ describe("v3 trip planning: threads, subgroups, partial settle-up, move, merge, 
     }
     const comments = (await api("GET", `/api/groups/${A.gid}/bills/${tour.id}/comments`)).json.comments as any[];
     expect(comments.map((c) => c.body)).toEqual(thread.map(([b]) => b));
-    expect(comments.map((c) => c.authorMemberId)).toEqual(thread.map(([, m]) => m));
+    // v0.10: always the caller's own person, whatever memberId says (this suite has one identity).
+    const me = (await api("GET", `/api/groups/${A.gid}`)).json.me as string;
+    expect(comments.map((c) => c.authorMemberId)).toEqual(thread.map(() => me));
     const withCount = (await api("GET", `/api/groups/${A.gid}`)).json.bills as any[];
     expect(withCount.find((b) => b.id === tour.id).commentCount).toBe(3);
     expect(withCount.find((b) => b.id === hotel.id).commentCount).toBe(0);

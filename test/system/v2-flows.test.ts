@@ -207,10 +207,12 @@ describe("v2 archive flow", () => {
     expect(actions).toEqual(expect.arrayContaining(["group.archive", "group.unarchive"]));
   });
 
-  it("a finished group can be deleted for good, receipts included", async () => {
+  it("a finished group can be deleted: to the bin (410), then for good when alone in it", async () => {
     const { gid } = await makeGroup(["Ann"]);
     await api("PATCH", `/api/groups/${gid}`, { archived: true });
     expect((await api("DELETE", `/api/groups/${gid}`)).status).toBe(204);
+    expect((await api("GET", `/api/groups/${gid}`)).status).toBe(410);
+    expect((await api("DELETE", `/api/groups/${gid}?forever=1`)).status).toBe(204);
     expect((await api("GET", `/api/groups/${gid}`)).status).toBe(404);
   });
 });

@@ -118,6 +118,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       if (!stillHere() || seq !== loadSeq) return false;
       if (!isView && err instanceof ApiError && err.code === "claim_required" && err.members) {
         claimView(err.members);
+      } else if (!isView && err instanceof ApiError && err.code === "trip_deleted") {
+        deletedView();
       } else if (!isView && err instanceof ApiError && err.code === "not_member") {
         forgetGroup(gid);
         notMemberView();
@@ -157,6 +159,23 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
               }
             },
           }, h("div", { slot: "start", class: "avatar initial", "aria-hidden": "true" }, initial(m.name)), h("div", { slot: "headline" }, m.name)))),
+        h("md-text-button", { onclick: () => navigate("/") }, t("common.goHome"))));
+  }
+
+  /** In the bin (v0.10): anyone in the trip can bring it back. */
+  function deletedView() {
+    clear(root, appBar(t("delete.done")),
+      h("main", { class: "page center stack", id: "main", dataset: { testid: "trip-deleted" } },
+        icon("delete"),
+        h("p", { class: "md-typescale-body-large" }, t("bin.tripDeleted")),
+        h("md-filled-button", { dataset: { testid: "restore-trip-page" }, onclick: async () => {
+          try {
+            await api.restoreGroup(gid);
+            renderGroup(root, gid);
+          } catch (e) {
+            snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
+          }
+        } }, icon("undo", "icon"), t("bin.restore")),
         h("md-text-button", { onclick: () => navigate("/") }, t("common.goHome"))));
   }
 
@@ -245,12 +264,20 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
 
   async function editGroup() {
     const name = h("md-outlined-text-field", { label: t("home.groupName"), value: state.group.name, maxLength: 60, dataset: { testid: "edit-group-name" } }) as Field;
-    const cur = h("md-outlined-select", { quick: true, label: t("home.currency") },
+    const cur = h("md-outlined-select", { quick: true, label: t("home.currency"), dataset: { testid: "edit-group-currency" } },
       CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === state.group.currency }, h("div", { slot: "headline" }, c)))) as HTMLElement & { value: string };
     const budget = h("md-outlined-text-field", {
       label: t("budget.field"), inputMode: "decimal", suffixText: state.group.currency, dataset: { testid: "edit-group-budget" },
       value: state.group.budget ? toInput(state.group.budget, state.group.currency) : "", supportingText: t("budget.help"),
-    }) as Field;
+    }) as Field & { suffixText: string };
+    // Untouched, the budget keeps its stored minor units on a currency switch — like every bill does (amounts aren't
+    // converted) — so show it in the newly picked currency. Typed by hand, it's read in that currency.
+    let budgetTouched = false;
+    budget.addEventListener("input", () => { budgetTouched = true; budget.error = false; });
+    cur.addEventListener("change", () => {
+      budget.suffixText = cur.value;
+      if (!budgetTouched) budget.value = state.group.budget ? toInput(state.group.budget, cur.value) : "";
+    });
     const err = h("div", { class: "form-error", role: "alert" });
     const archived = state.group.archived;
     const d = h("md-dialog", { dataset: { testid: "settings-dialog" } },
@@ -283,9 +310,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         h("md-text-button", { onclick: () => d.close("cancel") }, archived ? t("common.close") : t("common.cancel")),
         !archived && h("md-filled-button", { dataset: { testid: "edit-group-save" }, onclick: async () => {
           const raw = budget.value.trim();
-          // The budget is read in the currency chosen in this dialog (switching currency doesn't convert amounts).
-          const b = raw ? parseMoney(raw, cur.value) : null;
-          if (raw && !(b && b > 0)) {
+          const b = !budgetTouched ? state.group.budget : raw ? parseMoney(raw, cur.value) : null;
+          if (budgetTouched && raw && !(b && b > 0)) {
             budget.error = true;
             budget.errorText = t("budget.invalid");
             return;
@@ -321,8 +347,17 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     });
     if ((await openDialog(d)) === "ok") {
       forgetGroup(gid);
-      snackbar(t("delete.done"));
       navigate("/", true);
+      const name = state.group.name;
+      snackbar(t("delete.done"), { label: t("common.undo"), run: async () => {
+        try {
+          await api.restoreGroup(gid);
+          snackbar(t("bin.restored", { name }));
+          navigate(`/g/${gid}`);
+        } catch (e) {
+          snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
+        }
+      } });
     }
   }
 
@@ -392,7 +427,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           dequeue(gid, q.ref);
           sent++;
         } catch (e) {
-          if (e instanceof ApiError && (e.code === "network" || e.status === 429 || e.status >= 500)) break; // later
+          // Still offline, signed out (kept until the sign-in), busy or down: try again later.
+          if (e instanceof ApiError && (e.code === "network" || e.code === "signed_out" || e.status === 429 || e.status >= 500)) break;
           // Refused (e.g. a person was removed meanwhile): drop it, offer to enter it again.
           dequeue(gid, q.ref);
           const msg = e instanceof Error ? e.message : t("common.saveFailed");
@@ -509,6 +545,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         f.error = true;
         f.errorText = /promptpay/i.test(msg) ? t("member.promptpayError")
           : code === "last_link" ? t("member.lastLink")
+          : code === "email_locked" ? t("member.emailLocked", { name: m?.name ?? "" })
           : /already linked/i.test(msg) ? t("member.emailTaken")
           : /email/i.test(msg) ? t("member.emailError") : msg;
       }
@@ -1111,6 +1148,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "group.rename": return t("act.groupRename", { to: nm("to") });
       case "group.currency": return t("act.groupCurrency", { from: nm("from"), to: nm("to") });
       case "group.archive": return t("act.groupArchive");
+      case "group.delete": return t("act.groupDelete");
+      case "group.restore": return t("act.groupRestore");
       case "group.budget": return d.to ? t("act.groupBudget", { amount: money(Number(d.to)) }) : t("act.groupBudgetOff");
       case "group.unarchive": return t("act.groupUnarchive");
       case "member.add": return t("act.memberAdd", { name: nm("name") });

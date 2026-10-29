@@ -20,9 +20,11 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.9.0";
+export const VERSION = "0.10.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
+/** Days a deleted trip stays in the bin (v0.10). */
+export const BIN_DAYS = 30;
 
 export function apiError(c: Context, status: number, code: string, message: string) {
   return c.json({ error: { code, message } }, status as 400);
@@ -86,6 +88,12 @@ export async function scheduledMaintenance(env: Env) {
       const keys = await db.purgeDeleted(env.DB, PURGE_DAYS);
       if (keys.length) await env.RECEIPTS.delete(keys);
     }],
+    ["bin", async () => {
+      for (const gid of await db.expiredBinnedGroups(env.DB, BIN_DAYS)) {
+        const keys = await db.deleteGroup(env.DB, gid);
+        if (keys.length) await env.RECEIPTS.delete(keys);
+      }
+    }],
   ];
   const failed: string[] = [];
   for (const [name, run] of steps) {
@@ -114,6 +122,16 @@ api.get("/me/groups", async (c) => {
   return c.json({ groups: await db.groupsFor(c.env.DB, identity) });
 });
 
+/** Home (v0.10): my trips in the bin, restorable until `purgeAt`; `alone` = I may delete it for good now. */
+api.get("/me/deleted", async (c) => {
+  const identity = c.get("identity");
+  if (!identity) return noIdentity(c);
+  const trips = (await db.binnedGroupsFor(c.env.DB, identity)).map((t) => ({
+    ...t, purgeAt: new Date(Date.parse(t.deletedAt) + BIN_DAYS * 86_400_000).toISOString(),
+  }));
+  return c.json({ trips });
+});
+
 /** Home (v0.8): my position in each of my trips + my share of expenses per month/currency. */
 api.get("/me/overview", async (c) => {
   const identity = c.get("identity");
@@ -139,8 +157,16 @@ g.use("*", async (c, next) => {
   if (!identity) return noIdentity(c);
   const access = await db.getGroupAccess(c.env.DB, gid, identity);
   if (!access) return apiError(c, 404, "not_found", "group not found");
-  const { group, meId, claimed } = access;
+  const { group, meId, claimed, deletedAt } = access;
   const m = c.req.method;
+  const isRoot = /\/groups\/[^/]+\/?$/.test(c.req.path);
+  // In the bin (v0.10): only its people see it, and only to restore it or (when alone in it) delete it for good.
+  if (deletedAt) {
+    if (!meId) return apiError(c, 404, "not_found", "group not found");
+    const isRestore = m === "POST" && /\/groups\/[^/]+\/restore\/?$/.test(c.req.path);
+    if (!isRestore && !(isRoot && m === "DELETE"))
+      return c.json({ error: { code: "trip_deleted", message: "this trip was deleted; restore it to use it again", deletedAt } }, 410);
+  }
   const isClaim = m === "POST" && /\/me\/?$/.test(c.req.path);
   // Pre-0.4 trips have nobody linked: the first visitor says who they are (POST /me), which locks the trip.
   // Until then only the names are returned, to pick from.
@@ -149,11 +175,12 @@ g.use("*", async (c, next) => {
     const members = (await db.listMembers(c.env.DB, gid)).map(({ id, name }) => ({ id, name }));
     return c.json({ error: { code: "claim_required", message: "nobody is linked to this trip yet; pick who you are", members } }, 403);
   }
-  const isRoot = /\/groups\/[^/]+\/?$/.test(c.req.path);
   // Revoking a read-only or invite link (and saying who you are) must always be possible, even while archived.
   const isRevoke = m === "DELETE" && /\/(view-link|invite)\/?$/.test(c.req.path);
-  if (group.archived && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !(isRoot && (m === "PATCH" || m === "DELETE")))
+  if (group.archived && !deletedAt && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !(isRoot && (m === "PATCH" || m === "DELETE")))
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
+  // First visit: from now on this person's sign-in email can only be changed by them (v0.10).
+  if (meId && !access.seen) await db.markSeen(c.env.DB, gid, meId);
   c.set("group", group);
   c.set("me", meId);
   await next();
@@ -208,10 +235,26 @@ g.patch("/", async (c) => {
   return c.json({ group });
 });
 
+/**
+ * Delete (v0.10): to the bin for BIN_DAYS — anyone in the trip can restore it. `?forever=1` removes it at once
+ * (with its receipts), but only for someone alone in it: nobody can wipe a trip other people use.
+ */
 g.delete("/", async (c) => {
-  const keys = await db.deleteGroup(c.env.DB, gidOf(c));
-  if (keys.length) await c.env.RECEIPTS.delete(keys);
+  const gid = gidOf(c);
+  if (c.req.query("forever") === "1") {
+    if ((await db.linkedCount(c.env.DB, gid)) > 1)
+      return apiError(c, 409, "others_linked", `other people are in this trip: it stays restorable for ${BIN_DAYS} days`);
+    const keys = await db.deleteGroup(c.env.DB, gid);
+    if (keys.length) await c.env.RECEIPTS.delete(keys);
+    return c.body(null, 204);
+  }
+  await db.binGroup(c.env.DB, gid, actor(c));
   return c.body(null, 204);
+});
+
+g.post("/restore", async (c) => {
+  const group = await db.restoreGroup(c.env.DB, gidOf(c), actor(c));
+  return group ? c.json({ group }) : apiError(c, 409, "conflict", "this trip is not deleted");
 });
 
 // ---------- members ----------
@@ -245,6 +288,12 @@ g.patch("/members/:mid", async (c) => {
   const mid = c.req.param("mid");
   if (!ENTITY_ID_RE.test(mid)) return apiError(c, 404, "not_found", "member not found");
   const patch = parseMember(await readJson(c), false);
+  if (patch.email !== undefined && mid !== c.get("me")) {
+    // Someone's sign-in email is theirs once they've opened the trip (v0.10): nobody else can move or drop it.
+    const lock = await db.emailLocked(c.env.DB, gidOf(c), mid);
+    if (lock?.locked && patch.email !== lock.email)
+      return apiError(c, 403, "email_locked", `${lock.name} has already joined with that email; only they can change it`);
+  }
   if (patch.email === null && (await wouldUnlinkLast(c, mid))) return lastLink(c);
   try {
     const member = await db.updateMember(c.env.DB, gidOf(c), mid, patch, actor(c));

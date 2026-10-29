@@ -15,7 +15,7 @@ export interface TripPosition {
 export interface MonthSpend { month: string; currency: string; owed: number }
 
 const MINE = `
-  me AS (SELECT id AS mid, group_id AS gid FROM members WHERE email = ?1),
+  me AS (SELECT m.id AS mid, m.group_id AS gid FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ?1 AND g.deleted_at IS NULL),
   live AS (SELECT b.id, b.group_id, b.kind, b.amount, b.paid_by, b.date FROM bills b JOIN me ON b.group_id = me.gid WHERE b.deleted_at IS NULL),
   pay AS (
     SELECT l.group_id, l.kind, bp.amount FROM live l

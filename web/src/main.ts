@@ -17,7 +17,9 @@ import "@fontsource/roboto/latin-500.css";
 import "@fontsource/roboto/latin-700.css";
 import "./styles.css";
 import { dispatch, notFound, route } from "./router";
-import { lang } from "./i18n";
+import { lang, t } from "./i18n";
+import { h } from "./dom";
+import { SIGNED_OUT } from "./api";
 import { renderHome } from "./views/home";
 import { initPwa } from "./pwa";
 
@@ -29,6 +31,14 @@ if (typescaleStyles.styleSheet) document.adoptedStyleSheets.push(typescaleStyles
 
 lang(); // resolves the saved/browser language and sets <html lang> before the first render
 initPwa();
+
+// Access session expired (web/src/api.ts): say so — it is not "offline" — and offer the sign-in (a reload).
+window.addEventListener(SIGNED_OUT, () => {
+  if (document.querySelector("[data-testid=signed-out]")) return;
+  document.body.appendChild(h("div", { class: "signed-out", role: "alert", dataset: { testid: "signed-out" } },
+    h("span", { class: "grow" }, t("auth.expired")),
+    h("md-filled-button", { onclick: () => location.reload(), dataset: { testid: "signed-out-reload" } }, t("auth.reload"))));
+});
 const root = document.getElementById("app")!;
 
 route("/", () => renderHome(root));
