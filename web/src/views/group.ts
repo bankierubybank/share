@@ -13,7 +13,7 @@ import "@material/web/tabs/primary-tab.js";
 import { api, ApiError, type Activity, type Bill, type Category, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
-import { CURRENCIES, formatMoney } from "../money";
+import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
 import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
 import { forgetGroup, rememberGroup } from "../store";
 import { dispatch, navigate } from "../router";
@@ -21,6 +21,7 @@ import { lang, locale, setLang, t, tn } from "../i18n";
 import { attachPullToRefresh, attachRowGestures } from "../gestures";
 import { summarize } from "../../../src/lib/summary";
 import type { PendingSave } from "./bill-dialog";
+import { dequeue, enqueue, loadPage, queued, savePage } from "../offline";
 
 const cmpDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 
@@ -29,6 +30,9 @@ const loadBillDialog = () => import("./bill-dialog");
 const loadExport = () => import("../export");
 const loadStats = () => import("./stats");
 const loadMove = () => import("./move");
+const loadRemind = () => import("../remind");
+const loadImage = () => import("../summary-image");
+type PageData = Awaited<ReturnType<typeof api.groupPage>>;
 import { currentTheme, setTheme, type Theme } from "../theme";
 
 type Tab = "bills" | "summary" | "members" | "activity";
@@ -87,9 +91,22 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           summary: v.summary, recurring: [], activity: [], subgroups: [], me: null,
         };
       } else {
-        const [p, sm] = await Promise.all([api.groupPage(gid), loadStats()]);
+        let p: PageData;
+        try {
+          const [page, sm] = await Promise.all([api.groupPage(gid), loadStats()]);
+          p = page;
+          statsMod = sm;
+          offlineAt = null;
+          if (seq === loadSeq) savePage(gid, p);
+        } catch (e) {
+          // Offline (#8): show the last copy this device got; new bills queue until the connection is back.
+          const copy = e instanceof ApiError && e.code === "network" ? loadPage<PageData>(gid) : null;
+          if (!copy) throw e;
+          p = copy.page;
+          offlineAt = copy.savedAt;
+          statsMod = await loadStats().catch(() => null);
+        }
         if (seq !== loadSeq) return false; // a newer load is on its way
-        statsMod = sm;
         state = p;
         server = { bills: p.bills, summary: p.summary };
         rememberGroup(p.group);
@@ -155,6 +172,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   }
 
   let lastOwnRefresh = 0;
+  /** Set while showing the offline copy: when that copy was saved. */
+  let offlineAt: string | null = null;
   async function refresh() {
     lastOwnRefresh = Date.now();
     if ((await load()) && stillHere()) render();
@@ -212,6 +231,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     const menu = h("md-menu", { anchor: anchorId, positioning: "fixed", quick: true, dataset: { testid: "group-menu" } },
       item(t("menu.exportCsv"), "table_view", "export-csv", exportCsv),
       item(t("menu.print"), "print", "export-print", printPdf),
+      item(t("menu.image"), "image", "export-image", () => void summaryImage()),
       item(t("menu.themeChange", { label: themeLabel[currentTheme()] }), currentTheme() === "dark" ? "dark_mode" : currentTheme() === "light" ? "light_mode" : "contrast", "theme-toggle",
         () => { setTheme(next[currentTheme()]); snackbar(themeLabel[currentTheme()]); }),
       item(t("lang.switchTo"), "translate", "lang-toggle", () => { setLang(lang() === "th" ? "en" : "th"); dispatch(); }),
@@ -227,12 +247,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     const name = h("md-outlined-text-field", { label: t("home.groupName"), value: state.group.name, maxLength: 60, dataset: { testid: "edit-group-name" } }) as Field;
     const cur = h("md-outlined-select", { quick: true, label: t("home.currency") },
       CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === state.group.currency }, h("div", { slot: "headline" }, c)))) as HTMLElement & { value: string };
+    const budget = h("md-outlined-text-field", {
+      label: t("budget.field"), inputMode: "decimal", suffixText: state.group.currency, dataset: { testid: "edit-group-budget" },
+      value: state.group.budget ? toInput(state.group.budget, state.group.currency) : "", supportingText: t("budget.help"),
+    }) as Field;
     const err = h("div", { class: "form-error", role: "alert" });
     const archived = state.group.archived;
     const d = h("md-dialog", { dataset: { testid: "settings-dialog" } },
       h("div", { slot: "headline" }, t("menu.settings")),
       h("div", { slot: "content", class: "stack" },
-        !archived && name, !archived && cur,
+        !archived && name, !archived && cur, !archived && budget,
         !archived && h("p", { class: "md-typescale-body-small muted" }, t("settings.currencyNote")),
         await viewLinkSection(),
         !archived && h("div", { class: "stack-sm" },
@@ -258,8 +282,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       h("div", { slot: "actions" },
         h("md-text-button", { onclick: () => d.close("cancel") }, archived ? t("common.close") : t("common.cancel")),
         !archived && h("md-filled-button", { dataset: { testid: "edit-group-save" }, onclick: async () => {
+          const raw = budget.value.trim();
+          // The budget is read in the currency chosen in this dialog (switching currency doesn't convert amounts).
+          const b = raw ? parseMoney(raw, cur.value) : null;
+          if (raw && !(b && b > 0)) {
+            budget.error = true;
+            budget.errorText = t("budget.invalid");
+            return;
+          }
           try {
-            await api.updateGroup(gid, { name: name.value, currency: cur.value });
+            await api.updateGroup(gid, { name: name.value, currency: cur.value, ...(b !== state.group.budget ? { budget: b } : {}) });
             d.close("ok");
           } catch (e) {
             err.textContent = e instanceof Error ? e.message : t("common.saveFailed");
@@ -303,12 +335,14 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   let server: { bills: Bill[]; summary: Summary } = { bills: [], summary: { balances: [], settlements: [], total: 0, byCategory: {} } };
 
   function overlayPending() {
-    if (!pending.size) {
+    const waiting = isView ? [] : queued(gid);
+    if (!pending.size && !waiting.length) {
       state.bills = server.bills;
       state.summary = server.summary;
       return;
     }
-    let bills = server.bills;
+    let bills = [...server.bills];
+    for (const q of waiting) if (!pending.has(q.shown.id)) bills.push(q.shown);
     for (const op of pending.values()) {
       bills = bills.filter((b) => b.id !== op.id);
       if (op.bill) bills.push(op.bill);
@@ -330,13 +364,51 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       },
       (e) => {
         pending.delete(op.id);
+        // No connection (#8): keep a new bill on this device and send it when we're back online.
+        const offline = e instanceof ApiError && e.code === "network" && !!op.input && !!op.bill &&
+          enqueue(gid, { ref: op.id.slice(4), input: op.input, shown: op.bill, queuedAt: new Date().toISOString() });
         overlayPending();
         if (!stillHere()) return;
         render();
+        if (offline) return snackbar(op.receipt ? t("offline.queuedNoPhoto") : t("offline.queued"));
         const msg = e instanceof Error ? e.message : t("common.saveFailed");
         snackbar(t("bill.saveFailedToast", { msg }), op.bill ? { label: t("bill.editAgain"), run: () => void reopen(op) } : undefined);
       },
     );
+  }
+
+  /** Sends bills queued offline, oldest first. Stops at the first network failure (still offline). */
+  let flushing = false;
+  async function flushOutbox() {
+    if (isView || flushing) return;
+    const items = queued(gid);
+    if (!items.length) return;
+    flushing = true;
+    let sent = 0;
+    try {
+      for (const q of items) {
+        try {
+          await api.createBill(gid, { ...q.input, clientRef: q.ref });
+          dequeue(gid, q.ref);
+          sent++;
+        } catch (e) {
+          if (e instanceof ApiError && (e.code === "network" || e.status === 429 || e.status >= 500)) break; // later
+          // Refused (e.g. a person was removed meanwhile): drop it, offer to enter it again.
+          dequeue(gid, q.ref);
+          const msg = e instanceof Error ? e.message : t("common.saveFailed");
+          snackbar(t("offline.refused", { desc: q.shown.description, msg }), { label: t("bill.editAgain"), run: () => void reopen({ id: q.shown.id, bill: q.shown, done: Promise.resolve(null) }) });
+        }
+      }
+    } finally {
+      flushing = false;
+    }
+    if (sent) {
+      await refresh();
+      if (stillHere()) snackbar(tn("offline.synced", sent));
+    } else if (stillHere()) {
+      overlayPending();
+      render();
+    }
   }
 
   async function reopen(op: PendingSave) {
@@ -357,8 +429,10 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     if (await openBillDialog({ ...billOpts(), template: b })) refresh();
   }
 
+  const isQueued = (id: string) => id.startsWith("tmp-") && !pending.has(id);
+
   function swipeDelete(b: Bill) {
-    if (pending.has(b.id)) return;
+    if (pending.has(b.id) || isQueued(b.id)) return;
     const done = api.deleteBill(gid, b.id).then(() => null);
     track({ id: b.id, bill: null, done });
     undoable(b, done);
@@ -373,6 +447,13 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   async function editBill(bill: Bill) {
     if (isView) return;
     if (readOnly()) return snackbar(t("group.archivedEdit"));
+    if (isQueued(bill.id)) {
+      return snackbar(t("offline.waitingEdit"), { label: t("offline.discard"), run: () => {
+        dequeue(gid, bill.id.slice(4));
+        overlayPending();
+        render();
+      } });
+    }
     const op = pending.get(bill.id);
     if (op) {
       // Still saving: open it once the server has it (a failed save shows its own message).
@@ -551,14 +632,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         ].filter(Boolean).join(" · ");
         const cat = isPayment ? { icon: "payments" as const, label: t("bill.payment") } : { icon: CATEGORY_META[b.category].icon, label: categoryLabel(b.category) };
         const saving = pending.has(b.id);
+        const waiting = !saving && isQueued(b.id);
         items.push(h("md-list-item", {
-          type: isView ? "text" : "button", class: saving ? "saving" : "", onclick: () => editBill(b),
-          dataset: { testid: "bill-item", billId: b.id, ...(saving ? { saving: "1" } : {}) },
-          "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}${saving ? `, ${t("bill.saving")}` : ""}`,
+          type: isView ? "text" : "button", class: saving ? "saving" : waiting ? "queued" : "", onclick: () => editBill(b),
+          dataset: { testid: "bill-item", billId: b.id, ...(saving ? { saving: "1" } : {}), ...(waiting ? { queued: "1" } : {}) },
+          "aria-label": `${b.description}, ${money(b.amount)}, ${supporting}${saving ? `, ${t("bill.saving")}` : waiting ? `, ${t("offline.waiting")}` : ""}`,
         },
           h("div", { slot: "start", class: `avatar ${isPayment ? "payment" : ""}`, title: cat.label }, icon(cat.icon)),
           h("div", { slot: "headline" }, b.description),
           h("div", { slot: "supporting-text" }, saving && h("span", { class: "saving-tag", dataset: { testid: "bill-saving" } }, `${t("bill.saving")} · `),
+            waiting && h("span", { class: "saving-tag queued-tag", dataset: { testid: "bill-queued" } }, `${t("offline.waiting")} · `),
             supporting, extras && h("span", { class: "extras" }, ` · ${extras}`)),
           h("div", { slot: "end", class: "bill-end" },
             h("div", { class: "md-typescale-title-small tabular" }, money(b.amount)),
@@ -569,7 +652,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         const byId = new Map(state.bills.map((b) => [b.id, b]));
         listHost.querySelectorAll<HTMLElement>("[data-bill-id]").forEach((row) => {
           const b = byId.get(row.dataset.billId!);
-          if (b && !pending.has(b.id)) attachRowGestures(row, { onSwipeLeft: () => swipeDelete(b), onLongPress: b.kind === "expense" ? () => duplicateBill(b) : undefined });
+          if (b && !pending.has(b.id) && !isQueued(b.id)) attachRowGestures(row, { onSwipeLeft: () => swipeDelete(b), onLongPress: b.kind === "expense" ? () => duplicateBill(b) : undefined });
         });
       }
     }
@@ -623,6 +706,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       return h("li", { class: out ? "out" : "in", dataset: { testid: "hero-action" } },
         icon(out ? "arrow_forward" : "payments"),
         h("span", { class: "grow md-typescale-body-large" }, text),
+        !out && !isView && remindButton(s, "hero-remind"),
         !readOnly() && h("md-filled-tonal-button", { onclick: () => addBill({ from: s.from, to: s.to, amount: s.amount }), dataset: { testid: "hero-settle" },
           "aria-label": t("summary.settleAria", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }) }, t("summary.settle")));
     }) : [];
@@ -637,7 +721,32 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       actions.length > 0 && h("ul", { class: "hero-actions", "aria-label": t("summary.whoPays") }, actions),
       h("p", { class: "md-typescale-body-medium hero-sub hero-stats" },
         bal && h("span", { class: "tabular" }, `${t("hero.trip")} ${money(summary.total)} · `),
-        t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) })));
+        t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) })),
+      budgetBar());
+  }
+
+  /** "฿7,700 left of ฿20,000" + bar; amber from 80 %, red when over (#4). Spent = expenses (not payments). */
+  function budgetText() {
+    const b = state.group.budget;
+    if (!b) return null;
+    const spent = state.summary.total;
+    const used = spent / b;
+    const text = spent > b
+      ? t("budget.over", { amount: money(spent - b), budget: money(b) })
+      : t("budget.left", { amount: money(b - spent), budget: money(b) });
+    return { text, used, tone: used > 1 ? "over" : used >= 0.8 ? "warn" : "ok" };
+  }
+
+  function budgetBar() {
+    const bt = budgetText();
+    if (!bt) return null;
+    const pct = Math.round(bt.used * 100);
+    return h("div", { class: `budget ${bt.tone}`, dataset: { testid: "budget" } },
+      h("div", { class: "budget-top md-typescale-body-medium" },
+        h("span", { class: "tabular", dataset: { testid: "budget-text" } }, bt.text),
+        h("span", { class: "tabular budget-pct" }, `${pct}%`)),
+      h("div", { class: "budget-track", role: "progressbar", "aria-label": t("budget.label"), "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.min(pct, 100)) },
+        h("div", { class: "budget-fill", style: `width:${Math.min(100, bt.used * 100)}%` })));
   }
 
   function summaryPanel() {
@@ -649,8 +758,10 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
             return h("md-list-item", { class: dim ? "dim" : "", dataset: { testid: "settlement" } },
               h("div", { slot: "headline" }, h("strong", null, memberName(s.from)), t("summary.paysInfix"), h("strong", null, memberName(s.to))),
               h("div", { slot: "supporting-text", class: "md-typescale-title-medium amount-owed tabular" }, money(s.amount)),
-              !readOnly() && h("md-filled-tonal-button", { slot: "end", onclick: () => addBill({ from: s.from, to: s.to, amount: s.amount }), dataset: { testid: "settle-btn" },
-                "aria-label": t("summary.settleAria", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }) }, t("summary.settle")));
+              h("div", { slot: "end", class: "row settle-actions" },
+                !isView && remindButton(s, "remind-btn"),
+                !readOnly() && h("md-filled-tonal-button", { onclick: () => addBill({ from: s.from, to: s.to, amount: s.amount }), dataset: { testid: "settle-btn" },
+                  "aria-label": t("summary.settleAria", { from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) }) }, t("summary.settle"))));
           }))
       : h("div", { class: "settled", dataset: { testid: "all-settled" } }, icon("check_circle"), h("span", { class: "md-typescale-body-large" }, t("summary.allSettled")));
 
@@ -669,7 +780,11 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
               h("span", { class: "tabular" }, t("balance.share", { amount: money(b.owed) })))))));
 
     return h("div", { class: "stack-lg" },
-      h("section", { class: "card flush", "aria-labelledby": "pays-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, t("summary.whoPays"))), settlements),
+      h("section", { class: "card flush", "aria-labelledby": "pays-title" },
+        h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, t("summary.whoPays")),
+          !isView && summary.settlements.length > 1 && h("md-text-button", { onclick: () => void remindEveryone(), dataset: { testid: "remind-all" } },
+            icon("share", "icon"), t("remind.all"))),
+        settlements),
       h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, t("summary.balances"))), balances),
       categoryChart(),
       settleHistory(),
@@ -677,6 +792,68 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         const st = statsMod!.computeStats(state.bills, state.members);
         return st ? statsMod!.statsCard(st, money, memberName) : null;
       })());
+  }
+
+  // ---------- reminders (#6): a message to send through the phone's share sheet ----------
+  const tripUrl = () => `${location.origin}/g/${encodeURIComponent(gid)}`;
+  const debt = (s: { from: string; to: string; amount: number }) => ({ from: memberName(s.from), to: memberName(s.to), amount: money(s.amount) });
+
+  function remindButton(s: { from: string; to: string; amount: number }, testid: string) {
+    return h("md-icon-button", {
+      dataset: { testid }, title: t("remind.aria", { name: memberName(s.from) }), "aria-label": t("remind.aria", { name: memberName(s.from) }),
+      onclick: async (e: Event) => {
+        e.stopPropagation();
+        const r = await loadRemind();
+        const pp = state.members.find((m) => m.id === s.to)?.promptpay ?? null;
+        await r.shareText(state.group.name, r.reminderText(state.group.name, debt(s), pp, tripUrl()));
+      },
+    }, icon("notifications"));
+  }
+
+  async function remindEveryone() {
+    const r = await loadRemind();
+    await r.shareText(state.group.name, r.everyoneText(state.group.name, state.summary.settlements.map(debt), tripUrl()));
+  }
+
+  // ---------- summary image (#10) ----------
+  async function summaryImage() {
+    const { summaryPng } = await loadImage();
+    const { summary } = state;
+    const bt = budgetText();
+    const blob = await summaryPng({
+      trip: state.group.name,
+      subtitle: `${t("hero.trip")} ${money(summary.total)} · ${t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) })}`,
+      budget: bt?.text ?? null,
+      budgetUsed: bt?.used ?? null,
+      balancesTitle: t("summary.balances"),
+      balances: summary.balances.map((b) => ({
+        name: memberName(b.memberId),
+        text: b.net > 0 ? t("balance.gets", { amount: money(b.net) }) : b.net < 0 ? t("balance.owes", { amount: money(-b.net) }) : t("balance.settled"),
+        tone: b.net > 0 ? "pos" : b.net < 0 ? "neg" : "zero",
+      })),
+      paysTitle: t("summary.whoPays"),
+      pays: summary.settlements.map((s) => ({ text: `${memberName(s.from)} → ${memberName(s.to)}`, amount: money(s.amount) })),
+      settled: t("summary.allSettled"),
+      footer: t("image.footer", { date: new Date().toLocaleDateString(locale(), { dateStyle: "medium" }) }),
+    });
+    const url = URL.createObjectURL(blob);
+    const { safeFilename } = await loadExport();
+    const filename = `${safeFilename(state.group.name)}-summary.png`;
+    const file = new File([blob], filename, { type: "image/png" });
+    const canShare = !!navigator.canShare?.({ files: [file] });
+    const d = h("md-dialog", { dataset: { testid: "image-dialog" } },
+      h("div", { slot: "headline" }, t("image.title")),
+      h("div", { slot: "content", class: "stack" },
+        h("img", { src: url, alt: t("image.alt", { name: state.group.name }), class: "summary-image", dataset: { testid: "summary-image" } })),
+      h("div", { slot: "actions" },
+        h("md-text-button", { onclick: () => d.close("cancel") }, t("common.close")),
+        h("a", { href: url, download: filename, class: "link-button", dataset: { testid: "image-download" } },
+          h("md-outlined-button", { tabIndex: -1 }, icon("download", "icon"), t("image.download"))),
+        canShare && h("md-filled-button", { dataset: { testid: "image-share" }, onclick: async () => {
+          try { await navigator.share({ files: [file], title: state.group.name }); } catch { /* cancelled */ }
+        } }, icon("share", "icon"), t("image.share")))) as MdDialog;
+    await openDialog(d);
+    URL.revokeObjectURL(url);
   }
 
   function settleHistory() {
@@ -712,6 +889,15 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         sg && h("md-text-button", { class: "danger push-left", dataset: { testid: "subgroup-delete" }, onclick: async () => {
           await api.deleteSubgroup(gid, sg.id);
           d.close("ok");
+          // Undo (#12): a saved group is only a shortcut, so putting it back = saving it again.
+          snackbar(t("subgroup.deleted", { name: sg.name }), { label: t("common.undo"), run: async () => {
+            try {
+              await api.saveSubgroup(gid, { name: sg.name, memberIds: sg.memberIds.filter((id) => state.members.some((m) => m.id === id)) });
+              refresh();
+            } catch (e) {
+              snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
+            }
+          } });
         } }, t("common.delete")),
         h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
         h("md-filled-button", { dataset: { testid: "subgroup-save" }, onclick: async () => {
@@ -925,6 +1111,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "group.rename": return t("act.groupRename", { to: nm("to") });
       case "group.currency": return t("act.groupCurrency", { from: nm("from"), to: nm("to") });
       case "group.archive": return t("act.groupArchive");
+      case "group.budget": return d.to ? t("act.groupBudget", { amount: money(Number(d.to)) }) : t("act.groupBudgetOff");
       case "group.unarchive": return t("act.groupUnarchive");
       case "member.add": return t("act.memberAdd", { name: nm("name") });
       case "member.rename": return t("act.memberRename", { from: nm("from"), to: nm("to") });
@@ -991,6 +1178,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       !isView && readOnly() && h("div", { class: "banner", role: "status", dataset: { testid: "archived-banner" } },
         icon("archive"), h("span", { class: "grow" }, t("group.archivedBanner")),
         h("md-text-button", { onclick: async () => { await api.updateGroup(gid, { archived: false }); snackbar("Group unarchived"); refresh(); }, dataset: { testid: "banner-unarchive" } }, t("settings.unarchive"))),
+      offlineAt && h("div", { class: "banner offline", role: "status", dataset: { testid: "offline-banner" } },
+        icon("cloud_off"), h("span", { class: "grow" }, t("offline.banner", { when: relTime(offlineAt) }))),
       tipsBanner(),
       tripHeader(),
       // Two columns on laptops (bills + activity | summary + people); on phones one panel at a time (tabs).
@@ -1055,6 +1244,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       if (!stillHere() || gen !== pageGen) return;
       timer = window.setTimeout(tick, every);
       if (document.hidden || pending.size || document.querySelector("md-dialog[open]")) return;
+      if (queued(gid).length) await flushOutbox();
+      if (offlineAt) return void refresh(); // showing the offline copy: any answer from the server replaces it
       try {
         const { v } = await api.version(gid);
         if (!stillHere() || v === state.version) return;
@@ -1069,11 +1260,20 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       if (!document.hidden) void tick();
     };
     document.addEventListener("visibilitychange", onVisible);
+    const onOnline = () => {
+      if (!stillHere() || gen !== pageGen) return window.removeEventListener("online", onOnline);
+      void tick();
+    };
+    window.addEventListener("online", onOnline);
   }
 
   if ((await load()) && stillHere()) {
     render();
     startLiveRefresh();
+    if (!offlineAt) void flushOutbox();
+    // Fetch the bill dialog once the page is up (still not in the first paint): adding a bill then works even if
+    // the connection drops before the first Add (#8), with or without the service worker.
+    setTimeout(() => void loadBillDialog().catch(() => undefined), 500);
   }
 }
 

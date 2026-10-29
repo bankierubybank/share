@@ -77,7 +77,7 @@ test.describe("installable app (local: service worker allowed)", () => {
   test.skip(remote, "on prod the worker's own fetches would bypass the per-origin Access route (playwright.config.ts)");
   test.use({ serviceWorkers: "allow" });
 
-  test("manifest has installable icons; the worker registers and caches bundles only", async ({ page, browserName }, info) => {
+  test("manifest has installable icons; the worker registers and caches the shell + bundles only", async ({ page }, info) => {
     await page.goto("/");
     const href = await page.locator('link[rel="manifest"]').getAttribute("href");
     expect(await page.locator('link[rel="manifest"]').getAttribute("crossorigin")).toBe("use-credentials");
@@ -93,15 +93,16 @@ test.describe("installable app (local: service worker allowed)", () => {
     await expect(page.getByTestId("group-name")).toBeVisible();
     const controlled = await page.evaluate(() => !!navigator.serviceWorker.controller);
     info.annotations.push({ type: "sw-controlled", description: String(controlled) });
-    // Playwright's Firefox registers the worker but its page fetches never reached it in CI (cache stayed empty
-    // even with event.waitUntil). The cache is only a speed-up; unverified there — ISSUES #43.
-    if (browserName === "firefox") return;
-    // Writes land asynchronously after the response: poll instead of reading once.
+    // v0.9: the worker precaches this build itself at install (it no longer depends on the page's fetches passing
+    // through it — that never happened in Playwright's Firefox, ISSUES #43). One cache per build: share-<id>.
     const cachedPaths = () => page.evaluate(async () => {
-      const c = await caches.open("share-assets-v1");
-      return (await c.keys()).map((r) => new URL(r.url).pathname);
+      const names = (await caches.keys()).filter((k) => k.startsWith("share-"));
+      if (names.length !== 1) return [`caches: ${names.join(",")}`];
+      return (await (await caches.open(names[0])).keys()).map((r) => new URL(r.url).pathname);
     });
-    await expect.poll(async () => (await cachedPaths()).length, { timeout: 10_000 }).toBeGreaterThan(0);
-    expect((await cachedPaths()).every((p) => p.startsWith("/assets/"))).toBe(true);
+    await expect.poll(async () => (await cachedPaths()).filter((p) => p.startsWith("/assets/")).length, { timeout: 10_000 }).toBeGreaterThan(5);
+    const paths = await cachedPaths();
+    expect(paths).toContain("/");
+    expect(paths.every((p) => p === "/" || p.startsWith("/assets/"))).toBe(true); // never /api, never other pages
   });
 });

@@ -1,4 +1,4 @@
-# API Contract (v5 — app 0.6.0)
+# API Contract (v6 — app 0.9.0)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
@@ -22,7 +22,7 @@ Errors: `{ "error": { "code": string, "message": string } }`.
 ## Types
 
 ```ts
-Group   = { id; name; currency; archived: boolean; createdAt }
+Group   = { id; name; currency; archived: boolean; createdAt; budget: number | null } // 0.9: trip budget, minor units
 Member  = { id; name; promptpay: string | null;        // normalized PromptPay id (10/13/15 digits)
             email: string | null }                      // linked identity: who may open the trip as this person
 MyGroup = Group & { memberId; memberName }              // a trip I'm linked to
@@ -114,12 +114,12 @@ Both join routes share the stricter link rate limit. Activity: `invite.create`, 
 | POST | `/api/groups` | `{ name, currency, members: string[], me?: index }` | `201 { group, members, me }` (creator linked to `members[me]`) |
 | GET | `/api/groups/:gid` | – | `{ group, members, bills, me }` (`me` = my member id; live bills, newest first; materializes due recurring bills) |
 | GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups, invite /* 0.6: { active, expiresAt } */, version /* 0.8 */ }` — same values as the separate endpoints |
-| PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
+| PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean, budget?: number \| null }` | `{ group }` — budget (0.9): positive integer ≤ 1e11 or null to clear; logs `group.budget` |
 | DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
 | POST | `/api/groups/:gid/members` | `{ name, promptpay?, email? }` | `201 { member }` |
 | PATCH | `/api/groups/:gid/members/:mid` | `{ name?, promptpay?: string \| null, email?: string \| null }` | `{ member }`; email lowercased, unique per trip (409); 409 `last_link` |
 | DELETE | `/api/groups/:gid/members/:mid` | – | `204`; 409 if on a live bill or active recurring bill, or `last_link` |
-| POST | `/api/groups/:gid/bills` | Bill body | `201 { bill }` |
+| POST | `/api/groups/:gid/bills` | Bill body + optional `clientRef` | `201 { bill }`; (0.9) `clientRef` = 8–64 of `[A-Za-z0-9_-]`, unique per trip: if a bill with that key exists (even deleted) → `200 { bill, replayed: true }` with the first bill, nothing added (offline queue retries) |
 | PUT | `/api/groups/:gid/bills/:bid` | Bill body | `{ bill }` |
 | DELETE | `/api/groups/:gid/bills/:bid` | – | `204` **soft delete** (purged after 30 days) |
 | POST | `/api/groups/:gid/bills/:bid/restore` | – | `{ bill }`; 404 if not deleted |

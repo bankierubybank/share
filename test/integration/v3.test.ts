@@ -496,7 +496,7 @@ describe("read-only view links", () => {
     expect(v.json.readOnly).toBe(true);
     expect(Object.keys(v.json).sort()).toEqual(["bills", "group", "members", "readOnly", "summary"]);
 
-    expect(v.json.group).toEqual({ name: "Hidden Trip", currency: "USD", archived: false, createdAt: full.group.createdAt });
+    expect(v.json.group).toEqual({ name: "Hidden Trip", currency: "USD", archived: false, createdAt: full.group.createdAt, budget: null });
     expect(v.json.group).not.toHaveProperty("id");
     expect(v.text).not.toContain(gid);
     expect(v.text).not.toContain("812345678");

@@ -54,11 +54,12 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 
 ## Data model (D1 / SQLite)
 
-- `groups(id PK, name, currency, archived_at, created_at)`
+- `groups(id PK, name, currency, archived_at, created_at, budget)` — `budget` (0006): optional trip budget, minor units
 - `members(id PK, group_id FK, name, promptpay, email, position, created_at)` unique `(group_id, lower(name))`,
   unique `(group_id, email)` where set; index on `email` (my trips). `email` = linked identity (0004).
 - `bills(id PK, group_id FK, kind, description, amount, paid_by FK (first payer), date, split_mode, split_json,
-  category, original_currency, original_amount, fx_rate, receipt_key, recurrence_id, created_by, deleted_at, created_at, updated_at)`
+  category, original_currency, original_amount, fx_rate, receipt_key, recurrence_id, created_by, deleted_at, created_at, updated_at,
+  client_ref)` — `client_ref` (0006): retry key of offline-queued creates, unique `(group_id, client_ref)` where set
 - `bill_shares(bill_id FK, member_id FK, amount)` PK `(bill_id, member_id)` — who owes what (resolved cents)
 - `bill_payers(bill_id FK, member_id FK, amount)` PK `(bill_id, member_id)` — who paid what
 - `activity(id, group_id FK, at, actor, action, entity_id, detail JSON)`
@@ -114,11 +115,25 @@ batches far more (ISSUES #28). Rules:
   `scripts/render-icons.mjs`; `apple-touch-icon.png` for iOS "Add to Home Screen"). The manifest link uses
   `crossorigin="use-credentials"` — it sits behind Cloudflare Access, and a credential-less fetch would get the
   login redirect instead of JSON.
-- `web/public/sw.js` only serves hashed `/assets/*` cache-first (immutable); pages, `/api`, manifest and icons go to
-  the network untouched, so Access redirects and fresh data behave exactly as without it. Served `no-cache`
+- `web/public/sw.js` (0.9): at install it precaches `/` + every bundle of the build (the list and a build id are
+  written into `dist/sw.js` by the `sw-precache` plugin in `vite.config.ts`; one cache `share-<build id>`, old ones
+  dropped on activate). `/assets/*` cache-first; page loads network-first, untouched — only a network *failure*
+  falls back to the cached shell; `/api`, manifest and icons always go to the network. Served `no-cache`
   (`_headers`). "Install app" button on home appears when the browser offers `beforeinstallprompt` (`web/src/pwa.ts`).
 - E2E runs with `serviceWorkers: "block"` (a worker's own fetches would bypass the per-origin Access route on prod);
   `test/e2e/v8.spec.ts` opts back in locally.
+
+## Offline bill entry (0.9)
+
+- `web/src/offline.ts`, per trip in localStorage: `share.outbox:<gid>` (new bills that failed with a network
+  error: input + what to show) and `share.page:<gid>` (the last `/full` answer). `forgetGroup` removes both.
+- The trip page overlays queued bills (tagged "Waiting to sync", counted in totals via the shared `summarize`) and
+  sends them oldest-first with `clientRef` = the bill's temporary id: on the first network error it stops (still
+  offline); 429/5xx retry later; any other refusal drops the item with an "Edit again" toast.
+- Triggers: first load, `online` event, every live-refresh tick. A load that fails with a network error shows the
+  saved copy with an offline banner; the next tick replaces it with the server's answer.
+- The bill dialog chunk is prefetched shortly after the trip page renders, so Add works if the connection drops
+  before the first Add even without the service worker.
 
 ## Security model
 

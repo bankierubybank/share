@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.0 — 2026-10-29
+
+Owner picks from the backlog: #4, #6, #8, #10, #12, #17.
+
+### Trip budget (#4)
+- Settings → **Trip budget (optional)**. The trip header shows "฿7,700.00 left of ฿20,000.00 budget" with a bar
+  (amber from 80 %, red and "… over the budget" past 100 %). Spent = expenses; payments don't count.
+- API: `Group.budget` (minor units or null); `PATCH /groups/:gid { budget }` (null clears; 409 when archived);
+  activity `group.budget`. Migration `0006_budget_offline` (additive).
+
+### Settle-up reminders (#6)
+- A bell next to Settle (Summary) and next to "X pays you" (trip header) builds a ready message — who, how much,
+  the payee's PromptPay if set, the trip link — and opens the phone's share sheet (LINE, WhatsApp, …); on desktop
+  it's copied. **Share with everyone** (2+ payments) makes one list for the group chat. The app sends nothing itself.
+
+### Offline bill entry (#8)
+- No connection when saving a new bill or payment: it stays on this device ("Waiting to sync"), counts in the
+  totals at once, and is sent when the connection is back (online event / next poll / next open). Each new bill
+  carries a `clientRef`; the server returns the first bill for a repeated key, so a retry after a lost answer
+  can't add it twice. Edits and deletes still need a connection. Receipt photos aren't kept offline.
+- A trip opened before opens offline from this device's last copy (banner: "You're offline — showing the copy
+  from …"). The service worker now precaches the app shell + every bundle of the build and serves the shell when a
+  page load fails for lack of network; online, page loads are untouched (Access redirects pass through).
+- Offline copies are removed with the trip from this device when it's deleted or access is lost.
+
+### Summary image (#10)
+- ⋮ → **Summary image**: a PNG (1080 px wide) with totals, budget, balances and who pays whom — preview, Download,
+  and Share (where the browser can share files).
+
+### Undo instead of "are you sure?" (#12)
+- Deleting a bill no longer asks first; the toast offers Undo (it was already a soft delete).
+- Deleting a comment turns it into "Comment deleted · Undo" for 5 s (a toast would sit under the dialog);
+  closing the dialog deletes it for real. Deleting a saved subgroup offers Undo.
+- Kept: confirmations for removing a person (can purge deleted bills), stopping a repeat, deleting a trip.
+
+### Firefox bundle cache (#17, ISSUES #43)
+- Root cause sidestepped: the worker filled its cache only from page fetches passing through it, which Playwright's
+  Firefox never did. It now fetches the build's files itself at install. The E2E check runs on Firefox again (CI).
+
 ## 0.8.0 — 2026-10-29
 
 Owner picks from the backlog: #3, #4, #11 (PWA), #12, #22, #24 ("#1" was already done in 0.6 — skipped).

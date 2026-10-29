@@ -517,3 +517,23 @@ md-list-item[data-testid="bill-item"] .bill-end .md-typescale-title-small { font
 .spend-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; }
 .spend-list li + li { border-top: 1px solid var(--md-sys-color-outline-variant); }
 .spend-list li:first-child .md-typescale-title-small { color: var(--md-sys-color-primary); }
+
+/* ---------- v0.9 ---------- */
+/* Trip budget (#4): bar in the trip header; amber from 80 %, red when over. */
+.budget { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.budget-top { display: flex; justify-content: space-between; gap: 12px; }
+.budget-track { height: 8px; border-radius: 4px; background: color-mix(in srgb, currentColor 18%, transparent); overflow: hidden; }
+.budget-fill { height: 100%; border-radius: 4px; background: var(--md-sys-color-primary); }
+.budget.warn .budget-fill { background: #b26a00; }
+.budget.over .budget-fill { background: var(--negative); }
+.budget.over .budget-top { color: var(--negative); font-weight: 500; }
+/* Reminders (#6) sit next to Settle. */
+.settle-actions { gap: 4px; align-items: center; }
+/* Offline (#8): queued bills. */
+md-list-item.queued { opacity: 0.75; }
+.queued-tag { color: var(--md-sys-color-tertiary, #4a6267); }
+/* Summary image (#10). */
+.summary-image { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--md-sys-color-outline-variant); }
+.link-button { text-decoration: none; }
+/* Comment deleted, with Undo (#12). */
+.comment-gone { align-items: center; }

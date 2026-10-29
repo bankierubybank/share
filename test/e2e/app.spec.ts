@@ -120,7 +120,6 @@ test("edit and delete a bill", async ({ page }) => {
 
   await page.getByTestId("bill-item").first().click();
   await page.getByTestId("bill-delete").click();
-  await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("bills-empty")).toBeVisible();
 });
 

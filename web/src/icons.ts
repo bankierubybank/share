@@ -36,6 +36,7 @@ import i_local_activity from "@material-symbols/svg-400/outlined/local_activity.
 import i_link from "@material-symbols/svg-400/outlined/link.svg?raw";
 import i_lock from "@material-symbols/svg-400/outlined/lock.svg?raw";
 import i_more_vert from "@material-symbols/svg-400/outlined/more_vert.svg?raw";
+import i_notifications from "@material-symbols/svg-400/outlined/notifications.svg?raw";
 import i_payments from "@material-symbols/svg-400/outlined/payments.svg?raw";
 import i_percent from "@material-symbols/svg-400/outlined/percent.svg?raw";
 import i_person from "@material-symbols/svg-400/outlined/person.svg?raw";
@@ -97,6 +98,7 @@ export const ICONS = {
   link: i_link,
   lock: i_lock,
   more_vert: i_more_vert,
+  notifications: i_notifications,
   payments: i_payments,
   percent: i_percent,
   person: i_person,

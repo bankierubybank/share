@@ -247,7 +247,7 @@ describe("the view endpoint is read-only", () => {
     expect(v.text).not.toMatch(/promptpay/i);
     expect(JSON.stringify(v.json.members)).not.toMatch(/promptpay/i);
     // it only contains a group name field, no id
-    expect(Object.keys(v.json.group).sort()).toEqual(["archived", "createdAt", "currency", "name"]);
+    expect(Object.keys(v.json.group).sort()).toEqual(["archived", "budget", "createdAt", "currency", "name"]);
     // the real group endpoint still has them (sanity: the test would catch a leak)
     expect((await api("GET", `/api/groups/${gid}`)).text).toContain("0812345678");
   });

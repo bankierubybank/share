@@ -141,13 +141,11 @@ test("undo delete + activity log + restore (#11, #12)", async ({ page }) => {
   await addEqualBill(page, "Snacks", "40", "Ann");
   await page.getByTestId("bill-item").first().click();
   await page.getByTestId("bill-delete").click();
-  await page.getByTestId("confirm-ok").click();
   await page.locator("#snackbar md-text-button", { hasText: "Undo" }).click();
   await expect(page.getByTestId("bill-item")).toHaveCount(1);
 
   await page.getByTestId("bill-item").first().click();
   await page.getByTestId("bill-delete").click();
-  await page.getByTestId("confirm-ok").click();
   await showPanel(page, "activity");
   await expect(page.getByTestId("activity-list")).toContainText("Deleted “Snacks”");
   await expect(page.getByTestId("activity-list")).toContainText("Restored “Snacks”");

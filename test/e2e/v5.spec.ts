@@ -99,7 +99,6 @@ test("delete is instant and Undo still works once it lands", async ({ page }) =>
   await page.getByTestId("bill-item").filter({ hasText: "Ferry" }).click();
   await expect(page.getByTestId("bill-dialog")).toHaveAttribute("data-ready", "1");
   await page.getByTestId("bill-delete").click();
-  await page.getByTestId("confirm-ok").click();
   await expect(page.getByTestId("bill-item").filter({ hasText: "Ferry" })).toHaveCount(0);
   await expect(page.getByTestId("bills-empty")).toBeVisible(); // locally recomputed: nothing left
   expect(gate.count()).toBe(1);

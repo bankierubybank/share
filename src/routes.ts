@@ -4,7 +4,7 @@ import * as db from "./db";
 import { summarize } from "./lib/summary";
 import { ENTITY_ID_RE, GROUP_ID_RE, randomId } from "./lib/ids";
 import {
-  LIMITS, ValidationError, nextOccurrence, parseBill, parseGroupPatch, parseMember, parseNewGroup, parseRecurrence,
+  LIMITS, ValidationError, nextOccurrence, parseBill, parseClientRef, parseGroupPatch, parseMember, parseNewGroup, parseRecurrence,
 } from "./lib/validate";
 import { actorLabel } from "./lib/identity";
 import { runBackup } from "./backup";
@@ -20,7 +20,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -202,7 +202,7 @@ g.post("/me", async (c) => {
 
 g.patch("/", async (c) => {
   const patch = parseGroupPatch(await readJson(c));
-  if (c.get("group").archived && (patch.name !== undefined || patch.currency !== undefined) && patch.archived !== false)
+  if (c.get("group").archived && (patch.name !== undefined || patch.currency !== undefined || patch.budget !== undefined) && patch.archived !== false)
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
   const group = await db.updateGroup(c.env.DB, gidOf(c), patch, actor(c), c.get("group"));
   return c.json({ group });
@@ -280,9 +280,20 @@ async function memberIdSet(c: GCtx) {
 g.post("/bills", async (c) => {
   const gid = gidOf(c);
   const ctx = await db.billWriteContext(c.env.DB, gid);
-  const input = parseBill(await readJson(c), ctx.memberIds, c.get("group").currency);
+  const body = await readJson(c);
+  const input = parseBill(body, ctx.memberIds, c.get("group").currency);
+  const clientRef = parseClientRef(body);
+  // Offline queue retry (v0.9): the first attempt got through but its answer was lost → same bill, not a copy.
+  const earlier = clientRef ? await db.billByClientRef(c.env.DB, gid, clientRef) : null;
+  if (earlier) return c.json({ bill: earlier, replayed: true });
   if (ctx.billCount >= LIMITS.billsPerGroup) return apiError(c, 409, "conflict", `at most ${LIMITS.billsPerGroup} bills per group`);
-  return c.json({ bill: await db.createBill(c.env.DB, gid, input, actor(c)) }, 201);
+  try {
+    return c.json({ bill: await db.createBill(c.env.DB, gid, input, actor(c), null, clientRef) }, 201);
+  } catch (e) {
+    const raced = clientRef && isUnique(e) ? await db.billByClientRef(c.env.DB, gid, clientRef) : null;
+    if (raced) return c.json({ bill: raced, replayed: true });
+    throw e;
+  }
 });
 
 g.put("/bills/:bid", async (c) => {

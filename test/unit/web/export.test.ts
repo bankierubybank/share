@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Bill, Group, Member, Summary } from "../../../web/src/api";
 import { billsToCsv, safeFilename } from "../../../web/src/export";
 
-const group: Group = { id: "g", name: "Trip", currency: "THB", archived: false, createdAt: "2026-01-01" };
+const group: Group = { id: "g", name: "Trip", currency: "THB", archived: false, createdAt: "2026-01-01", budget: null };
 const members: Member[] = [
   { id: "a", name: "Ann", promptpay: null, email: null },
   { id: "b", name: "Ben", promptpay: null, email: null },

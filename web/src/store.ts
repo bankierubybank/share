@@ -26,6 +26,9 @@ export function rememberGroup(g: { id: string; name: string; currency: string; a
 export function forgetGroup(id: string) {
   try {
     localStorage.setItem(KEY, JSON.stringify(recentGroups().filter((x) => x.id !== id)));
+    // Offline copies (web/src/offline.ts): a trip I left or deleted must not linger on this device.
+    localStorage.removeItem(`share.page:${id}`);
+    localStorage.removeItem(`share.outbox:${id}`);
   } catch {
     /* storage unavailable */
   }

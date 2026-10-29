@@ -1,6 +1,6 @@
 import { api, ApiError, receiptUrl, type Bill, type BillInput, type BillKind, type Category, type Comment, type Group, type Member, type Split, type SplitMode, type Subgroup } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
-import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
+import { openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
 import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
 import { locale, t, tn } from "../i18n";
@@ -48,6 +48,10 @@ export interface PendingSave {
   bill: Bill | null;
   /** Resolves with the saved bill (null for a delete); rejects with the server's error. */
   done: Promise<Bill | null>;
+  /** New bills: what was sent (with `id` = "tmp-" + clientRef) — queued offline if the network was down (#8). */
+  input?: BillInput;
+  /** A receipt photo was attached (not kept when the bill is queued offline). */
+  receipt?: boolean;
 }
 
 const today = () => {
@@ -56,6 +60,8 @@ const today = () => {
 };
 
 const lastPayerKey = (gid: string) => `share.lastPayer:${gid}`;
+/** Comment deletes still on their way after a dialog closed, by bill id (a reopened dialog waits for them). */
+const commentDeletes = new Map<string, Promise<unknown>>();
 const store = {
   get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
@@ -543,8 +549,10 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     if (pendingReceipt || removeReceipt) shown.hasReceipt = !!pendingReceipt;
     const receipt = pendingReceipt;
     const dropReceipt = removeReceipt && !!bill?.hasReceipt;
+    // New bills carry their temporary id as a retry key, so a resend (offline queue, #8) can't add a copy.
+    const clientRef = bill ? undefined : shown.id.slice(4);
     const done = (async () => {
-      const saved = bill ? (await api.updateBill(gid, bill.id, body)).bill : (await api.createBill(gid, body)).bill;
+      const saved = bill ? (await api.updateBill(gid, bill.id, body)).bill : (await api.createBill(gid, { ...body, clientRef })).bill;
       try {
         if (receipt) await api.uploadReceipt(gid, saved.id, receipt);
         else if (dropReceipt) await api.deleteReceipt(gid, saved.id);
@@ -555,13 +563,13 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     })();
     if (kind === "expense" && !multiPayer) store.set(lastPayerKey(gid), paidBy.value);
     snackbar(bill ? t("bill.updated") : kind === "payment" ? t("bill.paymentRecorded") : t("bill.added"));
-    opts.onSaving!({ id: shown.id, bill: shown, done });
+    opts.onSaving!({ id: shown.id, bill: shown, done, ...(bill ? {} : { input: body, receipt: !!receipt }) });
     dialog.close("saved");
   }
 
   async function remove() {
     if (!bill) return;
-    if (!(await confirmDialog(t("bill.deleteTitle"), t("bill.deleteText", { desc: bill.description })))) return;
+    // No "are you sure?" (#12): the bill is soft-deleted and the toast that follows offers Undo.
     if (opts.onSaving) {
       const deleting = api.deleteBill(gid, bill.id).then(() => null);
       opts.onSaving({ id: bill.id, bill: null, done: deleting });
@@ -581,14 +589,32 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   // ---------- comments (edit mode) ----------
   const commentsBox = h("section", { class: "comments stack-sm", "aria-label": t("bill.comments"), dataset: { testid: "comments" } });
   const nameOf = (id: string | null) => members.find((m) => m.id === id)?.name ?? null;
-  async function loadComments() {
-    if (!bill) return;
-    let list: Comment[] = [];
+  // Deleting a comment (#12): the row turns into "Comment deleted · Undo" for a few seconds before it is really
+  // deleted (a toast would sit under the modal dialog). Closing the dialog deletes the ones still waiting.
+  const doomed = new Map<string, number>();
+  let comments: Comment[] = [];
+  const reallyDelete = async (cid: string) => {
+    clearTimeout(doomed.get(cid));
+    doomed.delete(cid);
     try {
-      list = (await api.comments(gid, bill.id)).comments;
+      await api.deleteComment(gid, bill!.id, cid);
+      comments = comments.filter((x) => x.id !== cid);
+      changed = true;
     } catch {
-      /* offline: show the box without history */
+      /* gone already, or offline: it stays */
     }
+  };
+  async function loadComments(fetch = true) {
+    if (!bill) return;
+    if (fetch) {
+      try {
+        await commentDeletes.get(bill.id); // reopened right after closing: let those deletes land first
+        comments = (await api.comments(gid, bill.id)).comments;
+      } catch {
+        /* offline: show the box without history */
+      }
+    }
+    const list = comments;
     const input = h("md-outlined-text-field", {
       type: "textarea", rows: 2, label: opts.viewAs ? t("bill.commentAs", { name: nameOf(opts.viewAs) ?? "" }) : t("bill.commentAdd"), maxLength: 500,
       dataset: { testid: "comment-input" },
@@ -606,16 +632,22 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       }
     } }, t("bill.post"));
     clear(commentsBox,
-      h("h3", { class: "md-typescale-title-small" }, `${t("bill.comments")}${list.length ? ` (${list.length})` : ""}`),
-      h("ol", { class: "comment-list" }, list.map((c) =>
-        h("li", { class: "comment", dataset: { testid: "comment" } },
+      h("h3", { class: "md-typescale-title-small" }, `${t("bill.comments")}${list.length - doomed.size ? ` (${list.length - doomed.size})` : ""}`),
+      h("ol", { class: "comment-list" }, list.map((c) => doomed.has(c.id)
+        ? h("li", { class: "comment comment-gone row", dataset: { testid: "comment-deleted" } },
+            h("span", { class: "grow md-typescale-body-medium muted" }, t("bill.commentDeleted")),
+            h("md-text-button", { type: "button", dataset: { testid: "comment-undo" }, onclick: () => {
+              clearTimeout(doomed.get(c.id));
+              doomed.delete(c.id);
+              void loadComments(false);
+            } }, t("common.undo")))
+        : h("li", { class: "comment", dataset: { testid: "comment" } },
           h("div", { class: "md-typescale-label-medium" }, nameOf(c.authorMemberId) ?? c.actor ?? t("bill.someone"),
             h("span", { class: "muted" }, ` · ${new Date(c.createdAt).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "short" })}`)),
           h("div", { class: "comment-body md-typescale-body-medium" }, c.body),
-          h("md-icon-button", { type: "button", class: "comment-del", "aria-label": t("bill.commentDelete"), dataset: { testid: "comment-delete" }, onclick: async () => {
-            await api.deleteComment(gid, bill.id, c.id);
-            changed = true;
-            loadComments();
+          h("md-icon-button", { type: "button", class: "comment-del", "aria-label": t("bill.commentDelete"), dataset: { testid: "comment-delete" }, onclick: () => {
+            doomed.set(c.id, window.setTimeout(() => void reallyDelete(c.id).then(() => loadComments(false)), 5000));
+            void loadComments(false);
           } }, icon("delete"))))),
       group.archived ? null : h("div", { class: "row comment-compose" }, h("div", { class: "grow" }, input), post));
   }
@@ -700,6 +732,12 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     if (!bill && kind === "expense") amount.focus();
   }, { once: true });
   const closedWith = await openDialog(dialog);
+  if (bill && doomed.size) {
+    const deleting = Promise.all([...doomed.keys()].map(reallyDelete));
+    commentDeletes.set(bill.id, deleting);
+    await deleting;
+    commentDeletes.delete(bill.id);
+  }
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   if (closedWith === "duplicate" && bill) opts.onDuplicate?.(bill);
   return changed;

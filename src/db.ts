@@ -9,6 +9,8 @@ export interface Group {
   currency: string;
   archived: boolean;
   createdAt: string;
+  /** Spending target for the trip (minor units of `currency`); null = none. */
+  budget: number | null;
 }
 export interface Member {
   id: string;
@@ -69,7 +71,8 @@ export interface Recurrence {
   createdAt: string;
 }
 
-interface GroupRow { id: string; name: string; currency: string; archived_at: string | null; created_at: string }
+interface GroupRow { id: string; name: string; currency: string; archived_at: string | null; created_at: string; budget: number | null }
+const GROUP_COLS = "id, name, currency, archived_at, created_at, budget";
 interface BillRow {
   id: string; kind: "expense" | "payment"; description: string; amount: number; paid_by: string; date: string;
   split_mode: SplitMode; split_json: string | null; category: string; original_currency: string | null;
@@ -83,7 +86,7 @@ const BILL_COLS =
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 const toGroup = (r: GroupRow): Group => ({
-  id: r.id, name: r.name, currency: r.currency, archived: r.archived_at !== null, createdAt: r.created_at,
+  id: r.id, name: r.name, currency: r.currency, archived: r.archived_at !== null, createdAt: r.created_at, budget: r.budget ?? null,
 });
 
 /** Legacy rows (pre-0002) have no split_json: derive it from resolved shares. */
@@ -134,13 +137,13 @@ export async function createGroup(
       db.prepare("INSERT INTO members (id, group_id, name, position, email) VALUES (?, ?, ?, ?, ?)").bind(m.id, gid, m.name, i, m.email),
     ),
     logActivity(db, gid, actor, "group.create", gid, { name, members: memberNames.length }),
-    db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid),
+    db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid),
   ]);
   return { group: toGroup((r[r.length - 1].results as GroupRow[])[0]), members };
 }
 
 export async function getGroup(db: D1Database, gid: string): Promise<Group | null> {
-  const r = await db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid).first<GroupRow>();
+  const r = await db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid).first<GroupRow>();
   return r ? toGroup(r) : null;
 }
 
@@ -148,7 +151,7 @@ export async function getGroup(db: D1Database, gid: string): Promise<Group | nul
 export async function getGroupAccess(db: D1Database, gid: string, identity: string): Promise<GroupAccess | null> {
   const r = await db
     .prepare(
-      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at,
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget,
          (SELECT id FROM members WHERE group_id = g.id AND email = ?2) AS me_id,
          EXISTS (SELECT 1 FROM members WHERE group_id = g.id AND email IS NOT NULL) AS claimed
        FROM groups g WHERE g.id = ?1`,
@@ -166,7 +169,7 @@ export async function isLinked(db: D1Database, gid: string, identity: string): P
 export async function groupsFor(db: D1Database, identity: string): Promise<MyGroup[]> {
   const { results } = await db
     .prepare(
-      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, m.id AS member_id, m.name AS member_name
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, m.id AS member_id, m.name AS member_name
        FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? ORDER BY g.created_at DESC LIMIT 200`,
     )
     .bind(identity)
@@ -208,21 +211,26 @@ export async function linkMe(
 }
 
 export async function updateGroup(
-  db: D1Database, gid: string, patch: { name?: string; currency?: string; archived?: boolean }, actor: string | null, before: Group,
+  db: D1Database, gid: string, patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null }, actor: string | null, before: Group,
 ) {
   const archivedSql = patch.archived === undefined ? "archived_at" : patch.archived ? `COALESCE(archived_at, ${NOW})` : "NULL";
   const stmts = [
     db
-      .prepare(`UPDATE groups SET name = COALESCE(?, name), currency = COALESCE(?, currency), archived_at = ${archivedSql} WHERE id = ?`)
-      .bind(patch.name ?? null, patch.currency ?? null, gid),
+      .prepare(
+        `UPDATE groups SET name = COALESCE(?1, name), currency = COALESCE(?2, currency), archived_at = ${archivedSql},
+         budget = CASE WHEN ?3 THEN ?4 ELSE budget END WHERE id = ?5`,
+      )
+      .bind(patch.name ?? null, patch.currency ?? null, patch.budget !== undefined ? 1 : 0, patch.budget ?? null, gid),
   ];
+  if (patch.budget !== undefined && patch.budget !== before.budget)
+    stmts.push(logActivity(db, gid, actor, "group.budget", gid, { from: before.budget, to: patch.budget }));
   if (patch.name !== undefined && patch.name !== before.name)
     stmts.push(logActivity(db, gid, actor, "group.rename", gid, { from: before.name, to: patch.name }));
   if (patch.currency !== undefined && patch.currency !== before.currency)
     stmts.push(logActivity(db, gid, actor, "group.currency", gid, { from: before.currency, to: patch.currency }));
   if (patch.archived !== undefined && patch.archived !== before.archived)
     stmts.push(logActivity(db, gid, actor, patch.archived ? "group.archive" : "group.unarchive", gid, null));
-  const r = await db.batch([...stmts, db.prepare("SELECT id, name, currency, archived_at, created_at FROM groups WHERE id = ?").bind(gid)]);
+  const r = await db.batch([...stmts, db.prepare(`SELECT ${GROUP_COLS} FROM groups WHERE id = ?`).bind(gid)]);
   const row = (r[r.length - 1].results as GroupRow[])[0];
   return row ? toGroup(row) : null;
 }
@@ -429,17 +437,19 @@ const childInserts = (db: D1Database, bid: string, input: BillInput) => [
 
 const billDetail = (input: BillInput) => ({ description: input.description, amount: input.amount, kind: input.kind });
 
-function billInsertStatements(db: D1Database, gid: string, bid: string, input: BillInput, actor: string | null, recurrenceId: string | null) {
+function billInsertStatements(
+  db: D1Database, gid: string, bid: string, input: BillInput, actor: string | null, recurrenceId: string | null, clientRef: string | null = null,
+) {
   return [
     db
       .prepare(
         `INSERT INTO bills (id, group_id, kind, description, amount, paid_by, date, split_mode, split_json, category,
-          original_currency, original_amount, fx_rate, recurrence_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          original_currency, original_amount, fx_rate, recurrence_id, created_by, client_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         bid, gid, input.kind, input.description, input.amount, input.payers[0].memberId, input.date, input.splitMode,
         JSON.stringify(input.split), input.category, input.fx?.currency ?? null, input.fx?.amount ?? null, input.fx?.rate ?? null,
-        recurrenceId, actor,
+        recurrenceId, actor, clientRef,
       ),
     ...childInserts(db, bid, input),
     logActivity(db, gid, actor, recurrenceId ? "bill.recurring" : "bill.create", bid, billDetail(input)),
@@ -447,11 +457,17 @@ function billInsertStatements(db: D1Database, gid: string, bid: string, input: B
 }
 
 export async function createBill(
-  db: D1Database, gid: string, input: BillInput, actor: string | null, recurrenceId: string | null = null,
+  db: D1Database, gid: string, input: BillInput, actor: string | null, recurrenceId: string | null = null, clientRef: string | null = null,
 ): Promise<Bill> {
   const bid = entityId();
-  const r = await db.batch([...billInsertStatements(db, gid, bid, input, actor, recurrenceId), ...billStatements(db, gid, bid)]);
+  const r = await db.batch([...billInsertStatements(db, gid, bid, input, actor, recurrenceId, clientRef), ...billStatements(db, gid, bid)]);
   return billsFrom(r.slice(-3))[0];
+}
+
+/** The bill an earlier (offline-queued) create with this key made, deleted or not; null if none. */
+export async function billByClientRef(db: D1Database, gid: string, clientRef: string): Promise<Bill | null> {
+  const row = await db.prepare("SELECT id FROM bills WHERE group_id = ? AND client_ref = ?").bind(gid, clientRef).first<{ id: string }>();
+  return row ? getBill(db, gid, row.id, true) : null;
 }
 
 /**

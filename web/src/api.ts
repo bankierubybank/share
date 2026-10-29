@@ -1,6 +1,7 @@
 // Typed client for the Worker API (see docs/API.md).
 
-export interface Group { id: string; name: string; currency: string; archived: boolean; createdAt: string }
+/** `budget`: optional spending target for the trip, minor units of `currency` (v0.9). */
+export interface Group { id: string; name: string; currency: string; archived: boolean; createdAt: string; budget: number | null }
 /** `email`: linked identity — who may open the trip as this person (null = nobody). */
 export interface Member { id: string; name: string; promptpay: string | null; email: string | null }
 /** A trip I'm linked to (home list). */
@@ -110,7 +111,7 @@ export const api = {
     }>("GET", `${g(gid)}/full`),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
-  updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean }) =>
+  updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null }) =>
     req<{ group: Group }>("PATCH", g(gid), patch),
   deleteGroup: (gid: string) => req<void>("DELETE", g(gid)),
   addMember: (gid: string, name: string, promptpay?: string | null, email?: string | null) =>
@@ -118,7 +119,8 @@ export const api = {
   updateMember: (gid: string, mid: string, patch: { name?: string; promptpay?: string | null; email?: string | null }) =>
     req<{ member: Member }>("PATCH", `${g(gid)}/members/${encodeURIComponent(mid)}`, patch),
   deleteMember: (gid: string, mid: string) => req<void>("DELETE", `${g(gid)}/members/${encodeURIComponent(mid)}`),
-  createBill: (gid: string, bill: BillInput) => req<{ bill: Bill }>("POST", `${g(gid)}/bills`, bill),
+  /** `clientRef`: retry-safe key (offline queue) — sending the same one again returns the first bill. */
+  createBill: (gid: string, bill: BillInput & { clientRef?: string }) => req<{ bill: Bill; replayed?: true }>("POST", `${g(gid)}/bills`, bill),
   updateBill: (gid: string, bid: string, bill: BillInput) => req<{ bill: Bill }>("PUT", b(gid, bid), bill),
   deleteBill: (gid: string, bid: string) => req<void>("DELETE", b(gid, bid)),
   // Empty JSON body on purpose: every POST must be application/json (CSRF guard in src/index.ts).

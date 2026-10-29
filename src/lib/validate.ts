@@ -106,6 +106,8 @@ export interface GroupPatch {
   name?: string;
   currency?: string;
   archived?: boolean;
+  /** null clears it. */
+  budget?: number | null;
 }
 
 export function parseGroupPatch(body: unknown): GroupPatch {
@@ -116,6 +118,11 @@ export function parseGroupPatch(body: unknown): GroupPatch {
   if (body.archived !== undefined) {
     if (typeof body.archived !== "boolean") fail("archived must be a boolean");
     out.archived = body.archived;
+  }
+  if (body.budget !== undefined) {
+    if (body.budget !== null && (!Number.isSafeInteger(body.budget) || (body.budget as number) <= 0 || (body.budget as number) > LIMITS.amountMax))
+      fail(`budget must be null or a positive integer of minor units ≤ ${LIMITS.amountMax}`);
+    out.budget = body.budget as number | null;
   }
   if (!Object.keys(out).length) fail("nothing to update");
   return out;
@@ -351,4 +358,12 @@ export function nextOccurrence(date: string, frequency: "weekly" | "monthly", an
   const nm = m === 12 ? 1 : m + 1;
   const days = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
   return `${ny}-${String(nm).padStart(2, "0")}-${String(Math.min(anchorDay, days)).padStart(2, "0")}`;
+}
+
+/** Offline-queued bills: a client-made key (the queue's temporary id) so a retried create is not added twice. */
+export function parseClientRef(body: unknown): string | null {
+  const v = isObj(body) ? body.clientRef : undefined;
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) fail("clientRef must be 8–64 letters, digits, - or _");
+  return v;
 }

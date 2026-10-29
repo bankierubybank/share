@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.8.0 (home overview, live refresh, installable) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 2191ff84)
+## Status: v0.9.0 (budgets, reminders, offline bills, summary image) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 73db0902)
 
-Local 2026-10-29 (0.8.0): unit 168, integration 189, system 32, security 118 (+2 prod-only), E2E 64×4 (256), rate limit 1 — green.
-Prod 2026-10-29 (2191ff84): system 32, security 112 (+8 local-only), E2E 118 (+10 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left. PWA files served (manifest, icons, `sw.js` no-cache).
+Local 2026-10-29 (0.9.0): unit 174, integration 192, system 36, security 118 (+2 prod-only), E2E 278 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
+Prod 2026-10-29 (73db0902): system 36, security 112 (+8 local-only), E2E 128 (+12 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0006 applied (backup `.tmp/prod-before-0006.sql`, local only).
 
 | Area | State |
 |------|-------|
@@ -111,9 +111,20 @@ Prod 2026-10-29 (2191ff84): system 32, security 112 (+8 local-only), E2E 118 (+1
 | 22 | Mark as paid | ✅ payment dialog button + QR hint |
 | 24 | THB default for Thai users | ✅ last-used currency, else Thai language / Bangkok clock → THB |
 
+## v0.9 status (backlog picks, round 5)
+
+| # | Item | State |
+|---|------|-------|
+| 4 | Trip budgets | ✅ `groups.budget`; bar in the trip header (amber ≥ 80 %, red over) |
+| 6 | Settle-up reminders | ✅ share-sheet / copy message per debtor + "Share with everyone"; no email sending |
+| 8 | Offline bill entry | ✅ new bills queue on the device, sync with `clientRef` (retry-safe); trip opens offline from the last copy; edits/deletes still need a connection |
+| 10 | Summary image | ✅ canvas PNG: preview, download, share |
+| 12 | Undo instead of confirm | ✅ bill delete (no confirm), comments (inline undo), subgroups |
+| 17 | Firefox bundle cache (ISSUES #43) | ✅ worker precaches at install; CI Firefox to confirm |
+
 ## Next ideas (backlog)
-- Not picked yet: #2 email autocomplete, #5 live FX, #6 receipt scan (Workers AI), #7 budgets, #8 bill templates,
-  #9 reminders, #10 import Splitwise/KittySplit, #11b offline bill entry, #14 leave trip, #17 staging env,
-  #19 error tracking/uptime, #20 restore drill, #23 hide search/filters on short trips.
+- Not picked yet: email autocomplete, live FX rates, receipt scan (Workers AI), bill templates, import
+  Splitwise/KittySplit CSV, leave trip, hide search/filters on short trips, staging env, error tracking/uptime,
+  restore drill, Durable Object per trip. Offline edits/deletes (only new bills queue today).
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).
