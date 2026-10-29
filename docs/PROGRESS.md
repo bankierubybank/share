@@ -120,7 +120,7 @@ Prod 2026-10-29 (73db0902): system 36, security 112 (+8 local-only), E2E 128 (+1
 | 8 | Offline bill entry | ✅ new bills queue on the device, sync with `clientRef` (retry-safe); trip opens offline from the last copy; edits/deletes still need a connection |
 | 10 | Summary image | ✅ canvas PNG: preview, download, share |
 | 12 | Undo instead of confirm | ✅ bill delete (no confirm), comments (inline undo), subgroups |
-| 17 | Firefox bundle cache (ISSUES #43) | ✅ worker precaches at install; CI Firefox to confirm |
+| 17 | Firefox bundle cache (ISSUES #43) | ✅ worker precaches on install; green on CI Firefox |
 
 ## Next ideas (backlog)
 - Not picked yet: email autocomplete, live FX rates, receipt scan (Workers AI), bill templates, import
