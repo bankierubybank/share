@@ -91,11 +91,12 @@ test.describe("installable app (local: service worker allowed)", () => {
     expect(new URL(scope).pathname).toBe("/");
     await page.reload();
     await expect(page.getByTestId("group-name")).toBeVisible();
-    const cached = await page.evaluate(async () => {
+    // Writes land asynchronously after the response: poll instead of reading once.
+    const cachedPaths = () => page.evaluate(async () => {
       const c = await caches.open("share-assets-v1");
       return (await c.keys()).map((r) => new URL(r.url).pathname);
     });
-    expect(cached.length).toBeGreaterThan(0);
-    expect(cached.every((p) => p.startsWith("/assets/"))).toBe(true);
+    await expect.poll(async () => (await cachedPaths()).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    expect((await cachedPaths()).every((p) => p.startsWith("/assets/"))).toBe(true);
   });
 });

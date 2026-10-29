@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.8.0 (home overview, live refresh, installable) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 7bfa9347)
+## Status: v0.8.0 (home overview, live refresh, installable) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 2191ff84)
 
 Local 2026-10-29 (0.8.0): unit 168, integration 189, system 32, security 118 (+2 prod-only), E2E 64×4 (256), rate limit 1 — green.
-Prod 2026-10-29 (7bfa9347): system 32, security 112 (+8 local-only), E2E 118 (+10 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left. PWA files served (manifest, icons, `sw.js` no-cache).
+Prod 2026-10-29 (2191ff84): system 32, security 112 (+8 local-only), E2E 118 (+10 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left. PWA files served (manifest, icons, `sw.js` no-cache).
 
 | Area | State |
 |------|-------|

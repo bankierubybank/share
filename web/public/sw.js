@@ -18,14 +18,14 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/assets/")) return;
-  event.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const hit = await cache.match(req);
-      if (hit) return hit;
-      const res = await fetch(req);
-      // Only real 200s (an Access redirect or error must never be cached as a bundle).
-      if (res.ok && res.type === "basic") void cache.put(req, res.clone());
-      return res;
-    }),
-  );
+  const work = caches.open(CACHE).then(async (cache) => {
+    const hit = await cache.match(req);
+    if (hit) return { res: hit, put: null };
+    const res = await fetch(req);
+    // Only real 200s (an Access redirect or error must never be cached as a bundle).
+    return { res, put: res.ok && res.type === "basic" ? cache.put(req, res.clone()) : null };
+  });
+  event.respondWith(work.then((w) => w.res));
+  // Keep the worker alive until the copy is written: a fire-and-forget put can be cut off (seen in Firefox).
+  event.waitUntil(work.then((w) => w.put).catch(() => undefined));
 });
