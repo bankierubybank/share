@@ -1,7 +1,10 @@
 // Typed client for the Worker API (see docs/API.md).
 
-/** `budget`: optional spending target for the trip, minor units of `currency` (v0.9). */
-export interface Group { id: string; name: string; currency: string; archived: boolean; createdAt: string; budget: number | null }
+/** `budget`: optional spending target for the trip, minor units of `currency` (v0.9). Trip dates (v0.11): YYYY-MM-DD. */
+export interface Group {
+  id: string; name: string; currency: string; archived: boolean; createdAt: string; budget: number | null;
+  startDate: string | null; endDate: string | null;
+}
 /** `email`: linked identity — who may open the trip as this person (null = nobody). */
 export interface Member { id: string; name: string; promptpay: string | null; email: string | null }
 /** A trip I'm linked to (home list). */
@@ -9,6 +12,19 @@ export interface MyGroup extends Group { memberId: string; memberName: string }
 export interface Share { memberId: string; amount: number }
 export type BillKind = "expense" | "payment";
 export type Category = "food" | "groceries" | "lodging" | "transport" | "activities" | "shopping" | "utilities" | "other";
+/** A bill's category: built-in, or "c:<id>" = one of the trip's own (v0.11). */
+export type BillCategory = Category | `c:${string}`;
+/** A trip's own category (v0.11); `icon` is one of CUSTOM_ICONS (web/src/categories.ts). */
+export interface CustomCategory { id: string; name: string; icon: string }
+/** What a receipt photo says (v0.11, Workers AI) — a suggestion to check, every field optional. */
+export interface ReceiptScan {
+  description?: string; amount?: number; date?: string; category?: Category;
+  /** The receipt is in another currency: its total, for the fx fields. */
+  fx?: { currency: string; amount: number };
+  items?: { description: string; amount: number }[];
+}
+/** Someone from my other trips (v0.11): email suggestions when adding people. */
+export interface Contact { email: string; name: string }
 export interface Item { description: string; amount: number; members: string[] }
 export type Split =
   | { mode: "equal"; members: string[] }
@@ -20,7 +36,7 @@ export type SplitMode = Split["mode"];
 export interface Fx { currency: string; amount: number; rate: string }
 export interface Bill {
   id: string; kind: BillKind; description: string; amount: number; paidBy: string; payers: Share[]; date: string;
-  category: Category; splitMode: SplitMode; split: Split; shares: Share[]; fx: Fx | null; hasReceipt: boolean;
+  category: BillCategory; splitMode: SplitMode; split: Split; shares: Share[]; fx: Fx | null; hasReceipt: boolean;
   recurrenceId: string | null; createdBy: string | null; createdAt: string; updatedAt: string; commentCount: number;
 }
 export interface Comment { id: string; billId: string; authorMemberId: string | null; actor: string | null; body: string; createdAt: string }
@@ -31,6 +47,8 @@ export interface ViewSnapshot {
   members: Omit<Member, "promptpay" | "email">[];
   bills: Omit<Bill, "createdBy" | "hasReceipt" | "recurrenceId">[];
   summary: Summary;
+  /** v0.11: the trip's own categories (names + icons). */
+  categories?: CustomCategory[];
   readOnly: true;
 }
 export interface TripPosition { groupId: string; paid: number; owed: number; net: number; total: number; bills: number }
@@ -41,12 +59,12 @@ export type JoinInfo =
   | { joined: true; groupId: string; me: string; group: { name: string; currency: string; archived: boolean } }
   | { joined: false; group: { name: string; currency: string; archived: boolean }; members: { id: string; name: string; taken: boolean }[]; expiresAt: string };
 export interface BillInput {
-  kind: BillKind; description: string; amount?: number; date: string; category: Category; split: Split;
+  kind: BillKind; description: string; amount?: number; date: string; category: BillCategory; split: Split;
   paidBy?: string; payers?: Share[]; fx?: Fx;
 }
 export interface Balance { memberId: string; paid: number; owed: number; net: number }
 export interface Settlement { from: string; to: string; amount: number }
-export interface Summary { balances: Balance[]; settlements: Settlement[]; total: number; byCategory: Partial<Record<Category, number>> }
+export interface Summary { balances: Balance[]; settlements: Settlement[]; total: number; byCategory: Partial<Record<BillCategory, number>> }
 export interface Activity {
   id: string; at: string; actor: string | null; action: string; entityId: string | null;
   detail: Record<string, unknown> | null; restorable: boolean;
@@ -118,11 +136,13 @@ export const api = {
   groupPage: (gid: string) =>
     req<{
       group: Group; members: Member[]; bills: Bill[]; me: string | null; summary: Summary; recurring: Recurrence[];
-      activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus; version: string;
+      activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus; version: string; categories: CustomCategory[];
     }>("GET", `${g(gid)}/full`),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
-  updateGroup: (gid: string, patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null }) =>
+  updateGroup: (gid: string, patch: {
+    name?: string; currency?: string; archived?: boolean; budget?: number | null; startDate?: string | null; endDate?: string | null;
+  }) =>
     req<{ group: Group }>("PATCH", g(gid), patch),
   /** To the bin (v0.10); `forever` = gone at once, allowed only when I'm the only one linked (409 others_linked). */
   deleteGroup: (gid: string, forever = false) => req<void>("DELETE", `${g(gid)}${forever ? "?forever=1" : ""}`),
@@ -136,7 +156,8 @@ export const api = {
   deleteMember: (gid: string, mid: string) => req<void>("DELETE", `${g(gid)}/members/${encodeURIComponent(mid)}`),
   /** `clientRef`: retry-safe key (offline queue) — sending the same one again returns the first bill. */
   createBill: (gid: string, bill: BillInput & { clientRef?: string }) => req<{ bill: Bill; replayed?: true }>("POST", `${g(gid)}/bills`, bill),
-  updateBill: (gid: string, bid: string, bill: BillInput) => req<{ bill: Bill }>("PUT", b(gid, bid), bill),
+  /** `ifUpdatedAt` (offline queue, v0.11): only if nobody changed it since → else 409 `stale`. */
+  updateBill: (gid: string, bid: string, bill: BillInput & { ifUpdatedAt?: string }) => req<{ bill: Bill }>("PUT", b(gid, bid), bill),
   deleteBill: (gid: string, bid: string) => req<void>("DELETE", b(gid, bid)),
   // Empty JSON body on purpose: every POST must be application/json (CSRF guard in src/index.ts).
   restoreBill: (gid: string, bid: string) => req<{ bill: Bill }>("POST", `${b(gid, bid)}/restore`, {}),
@@ -163,6 +184,19 @@ export const api = {
   viewLink: (gid: string) => req<{ viewId: string | null }>("GET", `${g(gid)}/view-link`),
   createViewLink: (gid: string) => req<{ viewId: string }>("POST", `${g(gid)}/view-link`, {}),
   revokeViewLink: (gid: string) => req<void>("DELETE", `${g(gid)}/view-link`),
+  saveCategory: (gid: string, cat: { id?: string; name: string; icon: string }) =>
+    cat.id
+      ? req<{ category: CustomCategory }>("PATCH", `${g(gid)}/categories/${encodeURIComponent(cat.id)}`, { name: cat.name, icon: cat.icon })
+      : req<{ category: CustomCategory }>("POST", `${g(gid)}/categories`, { name: cat.name, icon: cat.icon }),
+  deleteCategory: (gid: string, cid: string) => req<void>("DELETE", `${g(gid)}/categories/${encodeURIComponent(cid)}`),
+  /** Receipt photo → suggested bill fields (Workers AI). */
+  scanReceipt: (gid: string, image: Blob) =>
+    req<{ scan: ReceiptScan }>("POST", `${g(gid)}/scan`, undefined, { body: image, type: image.type || "image/jpeg" }),
+  contacts: () => req<{ contacts: Contact[] }>("GET", "/me/contacts"),
+  /** Web Push (v0.11): the server's VAPID public key; 404 when push isn't set up. */
+  pushKey: () => req<{ publicKey: string }>("GET", "/push/key"),
+  subscribePush: (sub: PushSubscriptionJSON, lang: string) => req<{ ok: true }>("POST", "/me/push", { ...sub, lang }),
+  unsubscribePush: (endpoint: string) => req<void>("DELETE", "/me/push", { endpoint }),
   inviteStatus: (gid: string) => req<InviteStatus>("GET", `${g(gid)}/invite`),
   createInvite: (gid: string) => req<{ token: string; expiresAt: string }>("POST", `${g(gid)}/invite`, {}),
   revokeInvite: (gid: string) => req<void>("DELETE", `${g(gid)}/invite`),

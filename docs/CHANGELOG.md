@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.11.0 — 2026-10-30
+
+Owner picks: #2, #6, #7, #8, #9, #11, #12, #13.
+
+### Receipt scan (#2)
+- New bill → **Scan receipt**: the photo is read by Workers AI (`@cf/meta/llama-4-scout-17b-16e-instruct`, JSON schema)
+  and fills description, date, category and either the amount, the line items (itemized split) or — for a receipt in
+  another currency — the fx fields. The photo is attached as the receipt. Everything stays editable; nothing is
+  saved until Save. The model's answer is re-validated server-side (`src/lib/scan.ts`). Own limit: 10 scans/min/person.
+- API: `POST /groups/:gid/scan` (raw JPEG/PNG/WebP ≤ 2 MB) → `{ scan }`.
+
+### Notifications (#6)
+- Settings → **Notifications · Turn on** (per device): when someone else adds a bill or payment, everyone else in
+  the trip gets a push ("Ann added “Dinner” · ฿900", in their language); tapping opens the trip. Web Push with VAPID,
+  payloads end-to-end encrypted (RFC 8291/8292, WebCrypto only, `src/lib/webpush.ts`). Only browser push services
+  are accepted as endpoints. iPhone: in the installed app (iOS 16.4+).
+- API: `GET /api/push/key`, `POST /api/me/push`, `DELETE /api/me/push`. Private key = Worker secret `VAPID_PRIVATE_KEY`.
+
+### Trip dates + spending per day (#7)
+- Settings → **First day / Last day**. The header shows "12–18 Oct"; Summary gets **Spending per day** (one column
+  per day, average per day); with a budget and an end date: "฿1,200 a day for the 4 days left".
+
+### Offline edits and deletes (#8)
+- Editing or deleting a bill with no connection now waits on the device too ("Waiting to sync") and syncs later. An
+  offline edit is sent with `ifUpdatedAt`: if someone changed the bill meanwhile, theirs stays and you get "Edit
+  again" (`409 stale`). Undo of an offline delete just drops it from the queue.
+
+### Email suggestions (#9)
+- Adding or editing a person suggests people (name · email) from your other trips. `GET /api/me/contacts`.
+
+### Keyboard shortcuts (#11)
+- On a trip: **N** new bill · **/** search · **S** settle up · **H** home · **?** the list (also in ⋮ menu).
+  Ignored while typing or with a dialog open.
+
+### Trip categories (#12)
+- Your own categories per trip (name + one of 24 icons), next to the built-in ones: "+ New category" in the bill
+  dialog, manage in Settings. Bills store `c:<id>`; a deleted category reads as Other. Charts, filters, CSV and view
+  links include them. API: `GET/POST /groups/:gid/categories`, `PATCH/DELETE …/categories/:cid` (≤ 20 per trip).
+
+### Accessibility (#13)
+- New axe checks (WCAG 2.1 AA, serious/critical) for Summary, People, Settings, shortcuts, summary image, person and
+  category dialogs, view link page, deleted-trip page and the home bin, on 4 browsers. Fixed: the summary image's
+  Download link wrapped a button (no accessible name) — now a single link-button.
+
+### Dev / CI
+- `wrangler dev --local` everywhere (+ `SCAN_FAKE=1`): the Workers AI binding otherwise opens a remote session that
+  needs Cloudflare credentials (CI has none). Integration tests use `remoteBindings: false` and throwaway VAPID keys.
+- Migration `0008_v11` (trip dates, `categories`, `push_subscriptions`). Backups include `categories`, never push
+  subscriptions.
+
 ## 0.10.0 — 2026-10-29
 
 Fixes from the code review (owner picked 1–4).

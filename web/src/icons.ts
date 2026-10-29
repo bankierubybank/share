@@ -7,9 +7,11 @@ import i_archive from "@material-symbols/svg-400/outlined/archive.svg?raw";
 import i_arrow_back from "@material-symbols/svg-400/outlined/arrow_back.svg?raw";
 import i_arrow_forward from "@material-symbols/svg-400/outlined/arrow_forward.svg?raw";
 import i_bar_chart from "@material-symbols/svg-400/outlined/bar_chart.svg?raw";
+import i_beach_access from "@material-symbols/svg-400/outlined/beach_access.svg?raw";
 import i_bolt from "@material-symbols/svg-400/outlined/bolt.svg?raw";
 import i_calculate from "@material-symbols/svg-400/outlined/calculate.svg?raw";
 import i_category from "@material-symbols/svg-400/outlined/category.svg?raw";
+import i_celebration from "@material-symbols/svg-400/outlined/celebration.svg?raw";
 import i_check from "@material-symbols/svg-400/outlined/check.svg?raw";
 import i_check_circle from "@material-symbols/svg-400/outlined/check_circle.svg?raw";
 import i_close from "@material-symbols/svg-400/outlined/close.svg?raw";
@@ -21,28 +23,40 @@ import i_dark_mode from "@material-symbols/svg-400/outlined/dark_mode.svg?raw";
 import i_delete from "@material-symbols/svg-400/outlined/delete.svg?raw";
 import i_delete_forever from "@material-symbols/svg-400/outlined/delete_forever.svg?raw";
 import i_directions_car from "@material-symbols/svg-400/outlined/directions_car.svg?raw";
+import i_document_scanner from "@material-symbols/svg-400/outlined/document_scanner.svg?raw";
 import i_download from "@material-symbols/svg-400/outlined/download.svg?raw";
 import i_edit from "@material-symbols/svg-400/outlined/edit.svg?raw";
 import i_filter_list from "@material-symbols/svg-400/outlined/filter_list.svg?raw";
+import i_fitness_center from "@material-symbols/svg-400/outlined/fitness_center.svg?raw";
+import i_flight from "@material-symbols/svg-400/outlined/flight.svg?raw";
 import i_group from "@material-symbols/svg-400/outlined/group.svg?raw";
 import i_group_add from "@material-symbols/svg-400/outlined/group_add.svg?raw";
 import i_groups from "@material-symbols/svg-400/outlined/groups.svg?raw";
+import i_hiking from "@material-symbols/svg-400/outlined/hiking.svg?raw";
 import i_history from "@material-symbols/svg-400/outlined/history.svg?raw";
 import i_hotel from "@material-symbols/svg-400/outlined/hotel.svg?raw";
 import i_image from "@material-symbols/svg-400/outlined/image.svg?raw";
 import i_info from "@material-symbols/svg-400/outlined/info.svg?raw";
+import i_keyboard from "@material-symbols/svg-400/outlined/keyboard.svg?raw";
+import i_label from "@material-symbols/svg-400/outlined/label.svg?raw";
 import i_light_mode from "@material-symbols/svg-400/outlined/light_mode.svg?raw";
-import i_local_activity from "@material-symbols/svg-400/outlined/local_activity.svg?raw";
 import i_link from "@material-symbols/svg-400/outlined/link.svg?raw";
+import i_local_activity from "@material-symbols/svg-400/outlined/local_activity.svg?raw";
+import i_local_bar from "@material-symbols/svg-400/outlined/local_bar.svg?raw";
+import i_local_cafe from "@material-symbols/svg-400/outlined/local_cafe.svg?raw";
+import i_local_gas_station from "@material-symbols/svg-400/outlined/local_gas_station.svg?raw";
 import i_lock from "@material-symbols/svg-400/outlined/lock.svg?raw";
+import i_medical_services from "@material-symbols/svg-400/outlined/medical_services.svg?raw";
 import i_more_vert from "@material-symbols/svg-400/outlined/more_vert.svg?raw";
 import i_notifications from "@material-symbols/svg-400/outlined/notifications.svg?raw";
+import i_notifications_off from "@material-symbols/svg-400/outlined/notifications_off.svg?raw";
 import i_payments from "@material-symbols/svg-400/outlined/payments.svg?raw";
 import i_percent from "@material-symbols/svg-400/outlined/percent.svg?raw";
 import i_person from "@material-symbols/svg-400/outlined/person.svg?raw";
 import i_person_add from "@material-symbols/svg-400/outlined/person_add.svg?raw";
 import i_person_pin from "@material-symbols/svg-400/outlined/person_pin.svg?raw";
 import i_person_remove from "@material-symbols/svg-400/outlined/person_remove.svg?raw";
+import i_pets from "@material-symbols/svg-400/outlined/pets.svg?raw";
 import i_photo_camera from "@material-symbols/svg-400/outlined/photo_camera.svg?raw";
 import i_print from "@material-symbols/svg-400/outlined/print.svg?raw";
 import i_qr_code_2 from "@material-symbols/svg-400/outlined/qr_code_2.svg?raw";
@@ -51,14 +65,19 @@ import i_receipt_long from "@material-symbols/svg-400/outlined/receipt_long.svg?
 import i_remove from "@material-symbols/svg-400/outlined/remove.svg?raw";
 import i_repeat from "@material-symbols/svg-400/outlined/repeat.svg?raw";
 import i_restaurant from "@material-symbols/svg-400/outlined/restaurant.svg?raw";
+import i_school from "@material-symbols/svg-400/outlined/school.svg?raw";
 import i_search from "@material-symbols/svg-400/outlined/search.svg?raw";
 import i_search_off from "@material-symbols/svg-400/outlined/search_off.svg?raw";
+import i_sell from "@material-symbols/svg-400/outlined/sell.svg?raw";
 import i_settings from "@material-symbols/svg-400/outlined/settings.svg?raw";
 import i_share from "@material-symbols/svg-400/outlined/share.svg?raw";
 import i_shopping_bag from "@material-symbols/svg-400/outlined/shopping_bag.svg?raw";
 import i_shopping_cart from "@material-symbols/svg-400/outlined/shopping_cart.svg?raw";
-import i_translate from "@material-symbols/svg-400/outlined/translate.svg?raw";
+import i_spa from "@material-symbols/svg-400/outlined/spa.svg?raw";
+import i_sports_soccer from "@material-symbols/svg-400/outlined/sports_soccer.svg?raw";
 import i_table_view from "@material-symbols/svg-400/outlined/table_view.svg?raw";
+import i_train from "@material-symbols/svg-400/outlined/train.svg?raw";
+import i_translate from "@material-symbols/svg-400/outlined/translate.svg?raw";
 import i_unarchive from "@material-symbols/svg-400/outlined/unarchive.svg?raw";
 import i_undo from "@material-symbols/svg-400/outlined/undo.svg?raw";
 
@@ -69,9 +88,11 @@ export const ICONS = {
   arrow_back: i_arrow_back,
   arrow_forward: i_arrow_forward,
   bar_chart: i_bar_chart,
+  beach_access: i_beach_access,
   bolt: i_bolt,
   calculate: i_calculate,
   category: i_category,
+  celebration: i_celebration,
   check: i_check,
   check_circle: i_check_circle,
   close: i_close,
@@ -83,28 +104,40 @@ export const ICONS = {
   delete: i_delete,
   delete_forever: i_delete_forever,
   directions_car: i_directions_car,
+  document_scanner: i_document_scanner,
   download: i_download,
   edit: i_edit,
   filter_list: i_filter_list,
+  fitness_center: i_fitness_center,
+  flight: i_flight,
   group: i_group,
   group_add: i_group_add,
   groups: i_groups,
+  hiking: i_hiking,
   history: i_history,
   hotel: i_hotel,
   image: i_image,
   info: i_info,
+  keyboard: i_keyboard,
+  label: i_label,
   light_mode: i_light_mode,
-  local_activity: i_local_activity,
   link: i_link,
+  local_activity: i_local_activity,
+  local_bar: i_local_bar,
+  local_cafe: i_local_cafe,
+  local_gas_station: i_local_gas_station,
   lock: i_lock,
+  medical_services: i_medical_services,
   more_vert: i_more_vert,
   notifications: i_notifications,
+  notifications_off: i_notifications_off,
   payments: i_payments,
   percent: i_percent,
   person: i_person,
   person_add: i_person_add,
   person_pin: i_person_pin,
   person_remove: i_person_remove,
+  pets: i_pets,
   photo_camera: i_photo_camera,
   print: i_print,
   qr_code_2: i_qr_code_2,
@@ -113,13 +146,18 @@ export const ICONS = {
   remove: i_remove,
   repeat: i_repeat,
   restaurant: i_restaurant,
+  school: i_school,
   search: i_search,
   search_off: i_search_off,
+  sell: i_sell,
   settings: i_settings,
   share: i_share,
   shopping_bag: i_shopping_bag,
   shopping_cart: i_shopping_cart,
+  spa: i_spa,
+  sports_soccer: i_sports_soccer,
   table_view: i_table_view,
+  train: i_train,
   translate: i_translate,
   unarchive: i_unarchive,
   undo: i_undo,

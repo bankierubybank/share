@@ -32,8 +32,12 @@
   // API: every /api request (600/min). LINKS: /api/join + /api/view, tokens someone might try to guess (30/min).
   "ratelimits": [
     { "name": "API_LIMIT", "namespace_id": "7301", "simple": { "limit": 600, "period": 60 } },
-    { "name": "LINK_LIMIT", "namespace_id": "7302", "simple": { "limit": 30, "period": 60 } }
+    { "name": "LINK_LIMIT", "namespace_id": "7302", "simple": { "limit": 30, "period": 60 } },
+    // SCAN: receipt photos read by Workers AI (v0.11), per person (10/min).
+    { "name": "SCAN_LIMIT", "namespace_id": "7303", "simple": { "limit": 10, "period": 60 } }
   ],
+  // Receipt scan (v0.11, src/lib/scan.ts). Local dev and tests use SCAN_FAKE=1 instead (no AI calls).
+  "ai": { "binding": "AI" },
   // Daily: D1 backup to R2, materialize due recurring bills, purge bills deleted > 30 days ago.
   "triggers": { "crons": ["17 0 * * *"] },
   "vars": {
@@ -41,7 +45,10 @@
     // which trips a caller can open (docs/ACCESS.md). Not secrets (AUD tag + team domain are public identifiers).
     // Local dev / tests run with `--var DEV_IDENTITY:1` instead (header-based identity); never set that here.
     "ACCESS_TEAM_DOMAIN": "bankierubybank.cloudflareaccess.com",
-    "ACCESS_AUD": "41642e58f024d0c0fa8bdc766ff86e500c26dcc2cdda30dd2faa6e6144ca6e60"
+    "ACCESS_AUD": "41642e58f024d0c0fa8bdc766ff86e500c26dcc2cdda30dd2faa6e6144ca6e60",
+    // Web Push (v0.11): public half of the VAPID key pair (scripts/vapid-keys.mjs). The private half is a secret:
+    // `npx wrangler secret put VAPID_PRIVATE_KEY`. Without it, notifications are simply off.
+    "VAPID_PUBLIC_KEY": "BCxpMX99NFAGap5GDDo61qR13hI96Q3ZX8jNSGp3qGoG9ZYq5T3bQyNqyN7HV26DErKx1fPL5oYq31LZAE_tH-A"
   },
   "observability": { "enabled": true }
 }

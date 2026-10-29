@@ -2,6 +2,7 @@
 import type { Context, Hono } from "hono";
 import * as db from "./db";
 import * as social from "./db-social";
+import { listCategories } from "./db-v11";
 import { ENTITY_ID_RE, GROUP_ID_RE } from "./lib/ids";
 import { matchMembersByName, parseComment, parseMove, parseSubgroup, SOCIAL_LIMITS } from "./lib/social";
 import { actorLabel } from "./lib/identity";
@@ -93,13 +94,14 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     const gid = GROUP_ID_RE.test(vid) ? await social.groupIdByViewId(c.env.DB, vid) : null;
     const group = gid ? await db.getGroup(c.env.DB, gid) : null;
     if (!group) return apiError(c, 404, "not_found", "link not found or revoked");
-    const [members, bills] = await Promise.all([db.listMembers(c.env.DB, group.id), db.listBills(c.env.DB, group.id)]);
+    const [members, bills, categories] = await Promise.all([db.listMembers(c.env.DB, group.id), db.listBills(c.env.DB, group.id), listCategories(c.env.DB, group.id)]);
     const { id: _secret, ...publicGroup } = group;
     return c.json({
       group: publicGroup,
       members: members.map(({ promptpay: _pp, email: _e, ...m }) => m),
       bills: bills.map(({ createdBy: _cb, hasReceipt: _r, recurrenceId: _rid, ...b }) => b),
       summary: summaryOf(members, bills),
+      categories, // names + icons (v0.11)
       readOnly: true,
     });
   });

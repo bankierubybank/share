@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.10.0 (review fixes: trip bin, email lock, sign-in expiry) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 3ed6b953)
+## Status: v0.11.0 (receipt scan, notifications, trip dates, categories, offline edits) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 226434fc)
 
-Local 2026-10-29 (0.10.0): unit 197, integration 199, system 36, security 118 (+2 prod-only), E2E 294 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
-Prod 2026-10-29 (3ed6b953): system 36, security 112 (+8 local-only), E2E 136 (+12 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0007 applied (backup `.tmp/prod-before-0007.sql`, local only).
+Local 2026-10-30 (0.11.0): unit 203, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
+Prod 2026-10-30 (226434fc): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0008 applied (backup `.tmp/prod-before-0008.sql`, local only). One real receipt scan on prod: 200 in ~2 s, read merchant + total (not date/items — prompt to tune).
 
 | Area | State |
 |------|-------|
@@ -27,6 +27,7 @@ Prod 2026-10-29 (3ed6b953): system 36, security 112 (+8 local-only), E2E 136 (+1
 | Remote git | ✅ https://github.com/bankierubybank/share (public) |
 
 ## Pending on owner
+- **Turn on notifications (v0.11):** set the Web Push private key once — `npx wrangler secret put VAPID_PRIVATE_KEY` (value in the git-ignored `.tmp/vapid.env`, then delete that file). Until then the Notifications button says it's unavailable.
 - **Open "Phuket trip" and pick who you are** (v0.4: pre-0.4 trips are unclaimed; first visitor claims, then only
   linked people can open it). "Khao Sok" was claimed 2026-10-27 as "Bank". Then add the others' emails under People.
 - Decide the Access policy for invitees (docs/ACCESS.md → Invite links): an invite link doesn't get anyone past Access.
@@ -131,6 +132,19 @@ Prod 2026-10-29 (3ed6b953): system 36, security 112 (+8 local-only), E2E 136 (+1
 | 3 | Trip bin (30 days) + email locked once opened | ✅ (ISSUES #49, #51) |
 | 4 | Comments by the signed-in person | ✅ (ISSUES #50) |
 | 5–16 | Rest of the review | open — ISSUES #52 |
+
+## v0.11 status (backlog picks, round 6)
+
+| # | Item | State |
+|---|------|-------|
+| 2 | Receipt scan (Workers AI) | ✅ Llama 4 Scout, re-validated suggestions, own rate limit |
+| 6 | Push notifications | ✅ Web Push/VAPID (own RFC 8291 code), per device, bill + payment by others |
+| 7 | Trip dates + spending per day | ✅ header dates, day chart, budget pace |
+| 8 | Offline edits/deletes | ✅ queued with `ifUpdatedAt` (409 stale) |
+| 9 | Email suggestions | ✅ from my other trips |
+| 11 | Keyboard shortcuts | ✅ N / S H ? |
+| 12 | Trip categories | ✅ ≤ 20 per trip, 24 icons |
+| 13 | Accessibility pass | ✅ 10 more axe checks × 4 browsers; Download link fixed |
 
 ## Next ideas (backlog)
 - Not picked yet: email autocomplete, live FX rates, receipt scan (Workers AI), bill templates, import

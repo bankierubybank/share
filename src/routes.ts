@@ -13,6 +13,8 @@ import { registerSocial } from "./routes-social";
 import { registerInvites } from "./routes-invite";
 import { stripMemberFromSubgroups } from "./db-social";
 import { overview, tripVersion } from "./db-overview";
+import { listCategories } from "./db-v11";
+import { notifyTrip, registerV11 } from "./routes-v11";
 
 /** `identity`: verified caller (src/lib/identity.ts), set by src/index.ts; null = unknown → 401 on trip routes. */
 export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
@@ -20,7 +22,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.10.0";
+export const VERSION = "0.11.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 /** Days a deleted trip stays in the bin (v0.10). */
@@ -48,6 +50,7 @@ export async function materializeDue(env: Env, gid?: string): Promise<number> {
     const group = await db.getGroup(env.DB, r.group_id);
     if (!group) continue;
     const memberIds = new Set((await db.listMembers(env.DB, r.group_id)).map((m) => m.id));
+    const catIds = new Set((await listCategories(env.DB, r.group_id)).map((x) => x.id));
     // Work out every due date first (≤60 per run), then claim + insert them in one go: on prod each D1 round
     // trip costs 100 ms+, so per-occurrence queries made catching up a series take seconds.
     const dates: string[] = [];
@@ -58,9 +61,11 @@ export async function materializeDue(env: Env, gid?: string): Promise<number> {
     }
     if (!dates.length) continue;
     const template = JSON.parse(r.template);
+    // The trip's own category was deleted meanwhile: the series goes on as "Other" (v0.11).
+    if (typeof template.category === "string" && template.category.startsWith("c:") && !catIds.has(template.category.slice(2))) template.category = "other";
     let inputs;
     try {
-      inputs = dates.map((date) => parseBill({ ...template, date }, memberIds, group.currency));
+      inputs = dates.map((date) => parseBill({ ...template, date }, memberIds, group.currency, catIds));
     } catch (e) {
       if (!(e instanceof ValidationError)) throw e;
       await db.failRecurrence(env.DB, r.id, e.message);
@@ -209,6 +214,7 @@ g.get("/full", async (c) => {
     subgroups: p.subgroups,
     invite: p.invite,
     version: p.version,
+    categories: p.categories,
   });
 });
 
@@ -229,8 +235,13 @@ g.post("/me", async (c) => {
 
 g.patch("/", async (c) => {
   const patch = parseGroupPatch(await readJson(c));
-  if (c.get("group").archived && (patch.name !== undefined || patch.currency !== undefined || patch.budget !== undefined) && patch.archived !== false)
+  const before = c.get("group");
+  if (before.archived && (patch.name !== undefined || patch.currency !== undefined || patch.budget !== undefined || patch.startDate !== undefined || patch.endDate !== undefined) && patch.archived !== false)
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
+  const start = patch.startDate === undefined ? before.startDate : patch.startDate;
+  const end = patch.endDate === undefined ? before.endDate : patch.endDate;
+  if (start && end && (end < start || Date.parse(end) - Date.parse(start) > 366 * 86_400_000))
+    return apiError(c, 400, "validation", "endDate must be on or after startDate, at most a year later");
   const group = await db.updateGroup(c.env.DB, gidOf(c), patch, actor(c), c.get("group"));
   return c.json({ group });
 });
@@ -330,14 +341,16 @@ g.post("/bills", async (c) => {
   const gid = gidOf(c);
   const ctx = await db.billWriteContext(c.env.DB, gid);
   const body = await readJson(c);
-  const input = parseBill(body, ctx.memberIds, c.get("group").currency);
+  const input = parseBill(body, ctx.memberIds, c.get("group").currency, ctx.categoryIds);
   const clientRef = parseClientRef(body);
   // Offline queue retry (v0.9): the first attempt got through but its answer was lost → same bill, not a copy.
   const earlier = clientRef ? await db.billByClientRef(c.env.DB, gid, clientRef) : null;
   if (earlier) return c.json({ bill: earlier, replayed: true });
   if (ctx.billCount >= LIMITS.billsPerGroup) return apiError(c, 409, "conflict", `at most ${LIMITS.billsPerGroup} bills per group`);
   try {
-    return c.json({ bill: await db.createBill(c.env.DB, gid, input, actor(c), null, clientRef) }, 201);
+    const bill = await db.createBill(c.env.DB, gid, input, actor(c), null, clientRef);
+    notifyOthers(c, bill);
+    return c.json({ bill }, 201);
   } catch (e) {
     const raced = clientRef && isUnique(e) ? await db.billByClientRef(c.env.DB, gid, clientRef) : null;
     if (raced) return c.json({ bill: raced, replayed: true });
@@ -351,7 +364,12 @@ g.put("/bills/:bid", async (c) => {
   if (!ENTITY_ID_RE.test(bid)) return apiError(c, 404, "not_found", "bill not found");
   const ctx = await db.billWriteContext(c.env.DB, gid, bid);
   if (!ctx.exists) return apiError(c, 404, "not_found", "bill not found");
-  const input = parseBill(await readJson(c), ctx.memberIds, c.get("group").currency);
+  const body = await readJson(c);
+  const input = parseBill(body, ctx.memberIds, c.get("group").currency, ctx.categoryIds);
+  // Offline queue (v0.11): an edit made offline only applies if nobody changed the bill since.
+  const ifUpdatedAt = typeof body === "object" && body !== null ? (body as { ifUpdatedAt?: unknown }).ifUpdatedAt : undefined;
+  if (typeof ifUpdatedAt === "string" && ifUpdatedAt !== ctx.updatedAt)
+    return apiError(c, 409, "stale", "someone changed this bill meanwhile");
   return c.json({ bill: await db.updateBill(c.env.DB, gid, bid, input, actor(c)) });
 });
 
@@ -448,7 +466,8 @@ g.get("/recurring", async (c) => c.json({ recurring: await db.listRecurrences(c.
 
 g.post("/recurring", async (c) => {
   const gid = gidOf(c);
-  const input = parseRecurrence(await readJson(c), await memberIdSet(c), c.get("group").currency);
+  const input = parseRecurrence(await readJson(c), await memberIdSet(c), c.get("group").currency, undefined,
+    new Set((await listCategories(c.env.DB, gid)).map((x) => x.id)));
   if ((await db.countRows(c.env.DB, "recurrences", gid)) >= LIMITS.recurrencesPerGroup)
     return apiError(c, 409, "conflict", `at most ${LIMITS.recurrencesPerGroup} recurring bills per group`);
   const rec = await db.createRecurrence(c.env.DB, gid, input.frequency, input.startDate, input.template, actor(c));
@@ -465,5 +484,25 @@ g.delete("/recurring/:rid", async (c) => {
 
 registerSocial(api, g, { apiError, readJson, summaryOf });
 registerInvites(api, g, { apiError, readJson });
+registerV11(api, g, { apiError, readJson });
+
+/** Push to everyone else in the trip (v0.11), after the response: a slow push service never delays the save. */
+function notifyOthers(c: GCtx, bill: db.Bill) {
+  const group = c.get("group");
+  const names = new Map<string, string>();
+  const work = (async () => {
+    for (const m of await db.listMembers(c.env.DB, group.id)) names.set(m.id, m.name);
+    const me = c.get("me");
+    await notifyTrip(c.env, group.id, group.name, c.get("identity"), {
+      kind: bill.kind, who: (me && names.get(me)) || "Someone", description: bill.description, amount: bill.amount, currency: group.currency,
+      to: bill.kind === "payment" ? names.get(bill.shares[0]?.memberId ?? "") : undefined,
+    }, new URL(c.req.url).origin);
+  })().catch((e) => console.warn("notify failed", e instanceof Error ? e.message : "error"));
+  try {
+    c.executionCtx.waitUntil(work);
+  } catch {
+    /* no execution context (some test harnesses): it still runs */
+  }
+}
 
 api.route("/groups/:gid", g);

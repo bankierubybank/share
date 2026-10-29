@@ -30,6 +30,35 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Web Push (v0.11, #6): { title, body, url, tag } from src/routes-v11.ts → a notification; tapping it opens the trip
+// (focusing a tab that already shows it). One notification per trip (tag), the newest replacing the last.
+self.addEventListener("push", (event) => {
+  let d = {};
+  try {
+    d = event.data ? event.data.json() : {};
+  } catch {
+    /* not ours */
+  }
+  const title = typeof d.title === "string" ? d.title : "Share";
+  event.waitUntil(self.registration.showNotification(title, {
+    body: typeof d.body === "string" ? d.body : "",
+    tag: typeof d.tag === "string" ? d.tag : undefined,
+    renotify: true,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    data: { url: typeof d.url === "string" && d.url.startsWith("/") ? d.url : "/" },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url ?? "/", self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((tabs) => {
+    const open = tabs.find((t) => t.url === url);
+    return open ? open.focus() : self.clients.openWindow(url);
+  }));
+});
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);

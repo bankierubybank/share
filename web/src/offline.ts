@@ -6,10 +6,17 @@
 import type { Bill, BillInput } from "./api";
 
 export interface Queued {
-  /** Retry key sent as clientRef; also the temporary bill id ("tmp-" + ref) shown meanwhile. */
+  /**
+   * create (default, pre-0.11 entries have no `op`): retry key sent as clientRef, also the temporary bill id
+   * ("tmp-" + ref) shown meanwhile. update / delete (v0.11): the bill id — a later change to it replaces this one.
+   */
   ref: string;
-  input: BillInput;
-  /** What the list shows until it syncs. */
+  op?: "create" | "update" | "delete";
+  /** create / update: what to send. */
+  input?: BillInput;
+  /** update: the bill's updatedAt it was based on — the server refuses it (409 stale) if someone changed it since. */
+  base?: string;
+  /** What the list shows until it syncs (delete: the bill being removed). */
   shown: Bill;
   queuedAt: string;
 }
@@ -37,7 +44,7 @@ function write(key: string, value: unknown): boolean {
 
 export function queued(gid: string): Queued[] {
   const v = read<Queued[]>(outboxKey(gid));
-  return Array.isArray(v) ? v.filter((q) => q && typeof q.ref === "string" && q.input && q.shown) : [];
+  return Array.isArray(v) ? v.filter((q) => q && typeof q.ref === "string" && q.shown && (q.op === "delete" || q.input)) : [];
 }
 
 /** False when it couldn't be stored (then the caller treats the save as failed). */

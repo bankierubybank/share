@@ -20,7 +20,8 @@ STARTED=""
 if ! curl -sf "$TARGET_URL/api/health" >/dev/null; then
   step "start wrangler dev"
   # DEV_IDENTITY=1: identity from the Cf-Access-Authenticated-User-Email header (tests act as several people).
-  npx wrangler dev --port "$PORT" --var DEV_IDENTITY:1 >.wrangler-dev.log 2>&1 &
+  # --local + SCAN_FAKE=1: no remote bindings (Workers AI needs an account; CI has none) — receipt scans are canned.
+  npx wrangler dev --local --port "$PORT" --var DEV_IDENTITY:1 --var SCAN_FAKE:1 >.wrangler-dev.log 2>&1 &
   STARTED=$!
   trap '[ -n "$STARTED" ] && kill $STARTED 2>/dev/null || true' EXIT
   for _ in $(seq 1 60); do curl -sf "$TARGET_URL/api/health" >/dev/null && break; sleep 1; done

@@ -80,11 +80,11 @@ app.use("/api/*", async (c, next) => {
 
 app.use("/api/*", async (c, next) => {
   const m = c.req.method;
-  if (m === "PUT" && /\/receipt$/.test(c.req.path)) {
+  if ((m === "PUT" && /\/receipt$/.test(c.req.path)) || (m === "POST" && /^\/api\/groups\/[^/]+\/scan$/.test(c.req.path))) {
     // Receipt upload: raw image body, sniffed in the route. Larger cap than JSON.
     if (!/^image\/(jpeg|png|webp)$/i.test(c.req.header("Content-Type") ?? ""))
       return apiError(c, 415, "unsupported_media_type", "Content-Type must be image/jpeg, image/png or image/webp");
-    if (Number(c.req.header("Content-Length") ?? "0") > RECEIPT_MAX) return apiError(c, 413, "payload_too_large", "receipt must be at most 2 MB");
+    if (Number(c.req.header("Content-Length") ?? "0") > RECEIPT_MAX) return apiError(c, 413, "payload_too_large", "image must be at most 2 MB");
   } else if (m === "POST" || m === "PUT" || m === "PATCH") {
     const ct = c.req.header("Content-Type") ?? "";
     if (!/^application\/json\b/i.test(ct)) return apiError(c, 415, "unsupported_media_type", "Content-Type must be application/json");

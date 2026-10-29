@@ -1,8 +1,8 @@
-import { api, ApiError, receiptUrl, type Bill, type BillInput, type BillKind, type Category, type Comment, type Group, type Member, type Split, type SplitMode, type Subgroup } from "../api";
+import { api, ApiError, receiptUrl, type Bill, type BillCategory, type BillInput, type BillKind, type Comment, type CustomCategory, type Group, type Member, type ReceiptScan, type Split, type SplitMode, type Subgroup } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
-import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
+import { CATEGORY_ORDER, categoryInfo } from "../categories";
 import { locale, t, tn } from "../i18n";
 import { parseBill, ValidationError } from "../../../src/lib/validate";
 import { downscaleImage } from "../image";
@@ -39,6 +39,8 @@ export interface BillDialogOptions {
   template?: Bill;
   /** Edit mode: user asked to duplicate this bill (caller opens a new dialog with it as template). */
   onDuplicate?: (bill: Bill) => void;
+  /** The trip's own categories (v0.11). */
+  categories?: CustomCategory[];
 }
 
 export interface PendingSave {
@@ -48,8 +50,12 @@ export interface PendingSave {
   bill: Bill | null;
   /** Resolves with the saved bill (null for a delete); rejects with the server's error. */
   done: Promise<Bill | null>;
-  /** New bills: what was sent (with `id` = "tmp-" + clientRef) — queued offline if the network was down (#8). */
+  /** What was sent (new bill: `id` = "tmp-" + clientRef) — queued offline if the network was down (#8). */
   input?: BillInput;
+  /** Edit: the bill's updatedAt it started from (an offline edit only applies if nobody changed it since). */
+  base?: string;
+  /** Delete: the bill being deleted (to queue it offline, and for Undo). */
+  original?: Bill;
   /** A receipt photo was attached (not kept when the bill is queued offline). */
   receipt?: boolean;
 }
@@ -96,7 +102,9 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     : [{ description: "", amount: "", members: new Set(members.map((m) => m.id)) }];
   let serviceStr = s0?.mode === "itemized" && s0.serviceBp ? bpToInput(s0.serviceBp) : "";
   let taxStr = s0?.mode === "itemized" && s0.taxBp ? bpToInput(s0.taxBp) : "";
-  let category: Category = src?.category ?? "other";
+  let category: BillCategory = src?.category ?? "other";
+  const customCats = [...(opts.categories ?? [])];
+  const customIds = () => new Set(customCats.map((c) => c.id));
   let multiPayer = (src?.payers.length ?? 1) > 1;
   const payerAmounts = new Map<string, string>(src && src.payers.length > 1 ? src.payers.map((p) => [p.memberId, toInput(p.amount, currency)]) : []);
   let fxOn = !!src?.fx;
@@ -172,18 +180,32 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   const receiver = h("md-outlined-select", { quick: true, label: t("bill.to"), dataset: { testid: "bill-receiver" }, onchange: () => update() },
     memberOptions(src?.shares[0]?.memberId ?? opts.payment?.to ?? members.find((m) => m.id !== defaultPayer)?.id ?? "")) as Select;
 
-  // Category chips (single select)
-  const catChips = CATEGORY_ORDER.map((c) => {
-    const chip = h("md-filter-chip", { label: categoryLabel(c), selected: c === category, dataset: { testid: `cat-${c}` } }) as Chip;
-    chip.prepend(icon(CATEGORY_META[c].icon, "icon"));
-    chip.addEventListener("click", (e) => {
-      e.preventDefault();
-      category = c;
-      catChips.forEach((x, i) => (x.selected = CATEGORY_ORDER[i] === c));
+  // Category chips (single select): built-in, then the trip's own (v0.11), then "+ New".
+  const categorySet = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bill.category") });
+  function renderCategories() {
+    const all: BillCategory[] = [...CATEGORY_ORDER, ...customCats.map((c) => `c:${c.id}` as const)];
+    const chips = all.map((c) => {
+      const info = categoryInfo(c, customCats);
+      const chip = h("md-filter-chip", { label: info.label, selected: c === category, dataset: { testid: c.startsWith("c:") ? "cat-custom" : `cat-${c}` } }) as Chip;
+      chip.prepend(icon(info.icon, "icon"));
+      chip.addEventListener("click", (e) => {
+        e.preventDefault();
+        category = c;
+        chips.forEach((x, i) => (x.selected = all[i] === c));
+      });
+      return chip;
     });
-    return chip;
-  });
-  const categorySet = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bill.category") }, catChips);
+    const add = !group.archived && h("md-assist-chip", { label: t("cat.new"), dataset: { testid: "cat-new" }, onclick: async () => {
+      const made = await (await import("./categories-dialog")).editCategoryDialog(gid);
+      if (!made) return;
+      customCats.push(made);
+      category = `c:${made.id}`;
+      changed = true;
+      renderCategories();
+    } }, icon("add", "icon"));
+    clear(categorySet, chips, add);
+  }
+  renderCategories();
 
   // Payers
   const payersBox = h("div", { class: "payers", dataset: { testid: "payers-box" } });
@@ -368,8 +390,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     try {
       const payers = body.payers;
       const probe = { ...body, payers: undefined, paidBy: members[0]?.id };
-      const r = parseBill(probe, memberIds, currency);
-      if (payers) parseBill({ ...body, amount: r.amount, fx: body.fx }, memberIds, currency);
+      const r = parseBill(probe, memberIds, currency, customIds());
+      if (payers) parseBill({ ...body, amount: r.amount, fx: body.fx }, memberIds, currency, customIds());
       return { ok: true, amount: r.amount, shares: new Map(r.shares.map((x) => [x.memberId, x.amount])) };
     } catch (e) {
       return { ok: false, error: e instanceof ValidationError ? humanize(e.message) : t("bill.err.check") };
@@ -454,6 +476,54 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
         h("md-outlined-button", { type: "button", onclick: () => fileInput.click(), dataset: { testid: "receipt-add" } }, icon("photo_camera", "icon"), src ? t("bill.receiptReplace") : t("bill.receiptAdd")),
         src && h("md-text-button", { type: "button", class: "danger", dataset: { testid: "receipt-remove" }, onclick: () => { pendingReceipt = null; removeReceipt = !!bill?.hasReceipt; renderReceipt(); } }, t("common.remove"))));
   }
+  // ---------- scan a receipt (#2, Workers AI): fills what it can read; everything stays editable ----------
+  const scanInput = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "visually-hidden", "aria-label": t("scan.choose"), dataset: { testid: "scan-input" } }) as HTMLInputElement;
+  const scanBtn = h("md-outlined-button", { type: "button", dataset: { testid: "scan-receipt" }, onclick: () => scanInput.click() },
+    icon("document_scanner", "icon"), t("scan.button")) as HTMLElement & { disabled: boolean };
+  scanInput.addEventListener("change", async () => {
+    const f = scanInput.files?.[0];
+    scanInput.value = "";
+    if (!f) return;
+    scanBtn.disabled = true;
+    scanBtn.textContent = t("scan.reading");
+    try {
+      const img = await downscaleImage(f);
+      const { scan } = await api.scanReceipt(gid, img);
+      applyScan(scan);
+      pendingReceipt = img; // the photo is the receipt too
+      removeReceipt = false;
+      renderReceipt();
+    } catch (e) {
+      snackbar(e instanceof ApiError ? t("scan.failed", { msg: e.message }) : t("bill.imageFailed"));
+    } finally {
+      scanBtn.disabled = false;
+      clear(scanBtn, icon("document_scanner", "icon"), t("scan.button"));
+    }
+  });
+
+  function applyScan(s: ReceiptScan) {
+    let filled = 0;
+    if (s.description && !description.value.trim()) { description.value = s.description; filled++; }
+    if (s.date) { date.value = s.date; filled++; }
+    if (s.category) { category = s.category; renderCategories(); }
+    if (s.fx) {
+      if (!fxOn) fxChip.click();
+      fxCurrency.value = s.fx.currency;
+      fxAmount.value = toInput(s.fx.amount, s.fx.currency);
+      prefillRate();
+      filled++;
+    } else if (s.items && s.items.length > 1) {
+      items.splice(0, items.length, ...s.items.map((it) => ({ description: it.description, amount: toInput(it.amount, currency), members: new Set(members.map((m) => m.id)) })));
+      modeChips[MODES.indexOf("itemized")].click();
+      filled++;
+    } else if (s.amount) {
+      amount.value = toInput(s.amount, currency);
+      filled++;
+    }
+    update();
+    snackbar(filled ? t("scan.done") : t("scan.nothing"));
+  }
+
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files?.[0];
     fileInput.value = "";
@@ -533,7 +603,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   function saveOptimistic(body: BillInput) {
     let parsed;
     try {
-      parsed = parseBill(body, memberIds, currency); // the server's own validator: what it will store
+      parsed = parseBill(body, memberIds, currency, customIds()); // the server's own validator: what it will store
     } catch (e) {
       formError.textContent = e instanceof ValidationError ? humanize(e.message) : t("bill.err.check");
       return;
@@ -563,7 +633,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     })();
     if (kind === "expense" && !multiPayer) store.set(lastPayerKey(gid), paidBy.value);
     snackbar(bill ? t("bill.updated") : kind === "payment" ? t("bill.paymentRecorded") : t("bill.added"));
-    opts.onSaving!({ id: shown.id, bill: shown, done, ...(bill ? {} : { input: body, receipt: !!receipt }) });
+    opts.onSaving!({ id: shown.id, bill: shown, done, input: body, receipt: !!receipt, ...(bill ? { base: bill.updatedAt } : {}) });
     dialog.close("saved");
   }
 
@@ -572,7 +642,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     // No "are you sure?" (#12): the bill is soft-deleted and the toast that follows offers Undo.
     if (opts.onSaving) {
       const deleting = api.deleteBill(gid, bill.id).then(() => null);
-      opts.onSaving({ id: bill.id, bill: null, done: deleting });
+      opts.onSaving({ id: bill.id, bill: null, done: deleting, original: bill });
       opts.onDeleted?.(bill, deleting);
       return dialog.close("deleted");
     }
@@ -684,6 +754,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
             h("p", { class: "md-typescale-body-small muted" }, t("bill.payPartial"))),
           qrBox, date, description, bill && commentsBox, formError)
       : h("div", { class: "stack" },
+          !bill && !group.archived && h("div", { class: "row wrap tight-gap" }, scanInput, scanBtn),
           amount,
           h("div", { class: "row wrap tight-gap" }, fxChip),
           fxBox,

@@ -2,6 +2,7 @@ import type { BillInput, Fx, SplitMode } from "./lib/validate";
 import type { Share } from "./lib/money";
 import { entityId, groupId } from "./lib/ids";
 import { versionStatement } from "./db-overview";
+import { categoriesStatement, type CustomCategory } from "./db-v11";
 
 export interface Group {
   id: string;
@@ -11,6 +12,9 @@ export interface Group {
   createdAt: string;
   /** Spending target for the trip (minor units of `currency`); null = none. */
   budget: number | null;
+  /** Trip dates (v0.11), YYYY-MM-DD or null. */
+  startDate: string | null;
+  endDate: string | null;
 }
 export interface Member {
   id: string;
@@ -75,8 +79,11 @@ export interface Recurrence {
   createdAt: string;
 }
 
-interface GroupRow { id: string; name: string; currency: string; archived_at: string | null; created_at: string; budget: number | null }
-const GROUP_COLS = "id, name, currency, archived_at, created_at, budget";
+interface GroupRow {
+  id: string; name: string; currency: string; archived_at: string | null; created_at: string; budget: number | null;
+  start_date: string | null; end_date: string | null;
+}
+const GROUP_COLS = "id, name, currency, archived_at, created_at, budget, start_date, end_date";
 interface BillRow {
   id: string; kind: "expense" | "payment"; description: string; amount: number; paid_by: string; date: string;
   split_mode: SplitMode; split_json: string | null; category: string; original_currency: string | null;
@@ -91,6 +98,7 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 const toGroup = (r: GroupRow): Group => ({
   id: r.id, name: r.name, currency: r.currency, archived: r.archived_at !== null, createdAt: r.created_at, budget: r.budget ?? null,
+  startDate: r.start_date ?? null, endDate: r.end_date ?? null,
 });
 
 /** Legacy rows (pre-0002) have no split_json: derive it from resolved shares. */
@@ -156,7 +164,7 @@ export async function getGroup(db: D1Database, gid: string): Promise<Group | nul
 export async function getGroupAccess(db: D1Database, gid: string, identity: string): Promise<GroupAccess | null> {
   const r = await db
     .prepare(
-      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, g.deleted_at,
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, g.start_date, g.end_date, g.deleted_at,
          m.id AS me_id, m.seen_at AS me_seen,
          EXISTS (SELECT 1 FROM members WHERE group_id = g.id AND email IS NOT NULL) AS claimed
        FROM groups g LEFT JOIN members m ON m.group_id = g.id AND m.email = ?2 WHERE g.id = ?1`,
@@ -179,7 +187,7 @@ export async function isLinked(db: D1Database, gid: string, identity: string): P
 export async function groupsFor(db: D1Database, identity: string): Promise<MyGroup[]> {
   const { results } = await db
     .prepare(
-      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, m.id AS member_id, m.name AS member_name
+      `SELECT g.id, g.name, g.currency, g.archived_at, g.created_at, g.budget, g.start_date, g.end_date, m.id AS member_id, m.name AS member_name
        FROM members m JOIN groups g ON g.id = m.group_id WHERE m.email = ? AND g.deleted_at IS NULL ORDER BY g.created_at DESC LIMIT 200`,
     )
     .bind(identity)
@@ -221,17 +229,26 @@ export async function linkMe(
 }
 
 export async function updateGroup(
-  db: D1Database, gid: string, patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null }, actor: string | null, before: Group,
+  db: D1Database, gid: string,
+  patch: { name?: string; currency?: string; archived?: boolean; budget?: number | null; startDate?: string | null; endDate?: string | null },
+  actor: string | null, before: Group,
 ) {
   const archivedSql = patch.archived === undefined ? "archived_at" : patch.archived ? `COALESCE(archived_at, ${NOW})` : "NULL";
   const stmts = [
     db
       .prepare(
         `UPDATE groups SET name = COALESCE(?1, name), currency = COALESCE(?2, currency), archived_at = ${archivedSql},
-         budget = CASE WHEN ?3 THEN ?4 ELSE budget END WHERE id = ?5`,
+         budget = CASE WHEN ?3 THEN ?4 ELSE budget END,
+         start_date = CASE WHEN ?6 THEN ?7 ELSE start_date END, end_date = CASE WHEN ?8 THEN ?9 ELSE end_date END WHERE id = ?5`,
       )
-      .bind(patch.name ?? null, patch.currency ?? null, patch.budget !== undefined ? 1 : 0, patch.budget ?? null, gid),
+      .bind(
+        patch.name ?? null, patch.currency ?? null, patch.budget !== undefined ? 1 : 0, patch.budget ?? null, gid,
+        patch.startDate !== undefined ? 1 : 0, patch.startDate ?? null, patch.endDate !== undefined ? 1 : 0, patch.endDate ?? null,
+      ),
   ];
+  const datesChanged = (patch.startDate !== undefined && patch.startDate !== before.startDate) || (patch.endDate !== undefined && patch.endDate !== before.endDate);
+  if (datesChanged)
+    stmts.push(logActivity(db, gid, actor, "group.dates", gid, { start: patch.startDate === undefined ? before.startDate : patch.startDate, end: patch.endDate === undefined ? before.endDate : patch.endDate }));
   if (patch.budget !== undefined && patch.budget !== before.budget)
     stmts.push(logActivity(db, gid, actor, "group.budget", gid, { from: before.budget, to: patch.budget }));
   if (patch.name !== undefined && patch.name !== before.name)
@@ -446,17 +463,24 @@ export async function getBill(db: D1Database, gid: string, bid: string, includeD
   return billsFrom(await db.batch(billStatements(db, gid, bid, includeDeleted)))[0] ?? null;
 }
 
-/** What a bill write needs to validate, in one round trip: member ids, live bill count, and whether `bid` exists. */
+/**
+ * What a bill write needs to validate, in one round trip: member ids, live bill count, whether `bid` exists (and
+ * when it last changed), and the trip's own category ids.
+ */
 export async function billWriteContext(db: D1Database, gid: string, bid?: string) {
-  const [members, count, exists] = await db.batch([
+  const [members, count, exists, cats] = await db.batch([
     db.prepare("SELECT id FROM members WHERE group_id = ?").bind(gid),
     db.prepare("SELECT COUNT(*) AS n FROM bills WHERE group_id = ? AND deleted_at IS NULL").bind(gid),
-    db.prepare("SELECT 1 AS ok FROM bills WHERE id = ? AND group_id = ? AND deleted_at IS NULL").bind(bid ?? "", gid),
+    db.prepare("SELECT updated_at FROM bills WHERE id = ? AND group_id = ? AND deleted_at IS NULL").bind(bid ?? "", gid),
+    db.prepare("SELECT id FROM categories WHERE group_id = ?").bind(gid),
   ]);
+  const row = (exists.results as { updated_at: string }[])[0];
   return {
     memberIds: new Set((members.results as { id: string }[]).map((m) => m.id)),
     billCount: (count.results as { n: number }[])[0]?.n ?? 0,
-    exists: exists.results.length > 0,
+    exists: !!row,
+    updatedAt: row?.updated_at ?? null,
+    categoryIds: new Set((cats.results as { id: string }[]).map((x) => x.id)),
   };
 }
 
@@ -471,6 +495,7 @@ export async function groupPage(db: D1Database, gid: string, activityLimit: numb
     db.prepare("SELECT id, name, member_ids FROM subgroups WHERE group_id = ? ORDER BY created_at, id").bind(gid),
     db.prepare("SELECT invite_expires FROM groups WHERE id = ? AND invite_hash IS NOT NULL").bind(gid),
     versionStatement(db, gid),
+    categoriesStatement(db, gid),
   ]);
   const inv = (r[8].results as { invite_expires: string }[])[0];
   const inviteLive = !!inv && inv.invite_expires > new Date().toISOString();
@@ -483,6 +508,7 @@ export async function groupPage(db: D1Database, gid: string, activityLimit: numb
     activity: (r[5].results as unknown as ActivityRow[]).map(toActivity),
     deleted: new Set((r[6].results as { id: string }[]).map((x) => x.id)),
     subgroups: (r[7].results as { id: string; name: string; member_ids: string }[]).map((s) => ({ id: s.id, name: s.name, memberIds: JSON.parse(s.member_ids) as string[] })),
+    categories: r[10].results as unknown as CustomCategory[],
   };
 }
 

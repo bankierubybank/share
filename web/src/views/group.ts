@@ -10,11 +10,11 @@ import "@material/web/progress/circular-progress.js";
 import "@material/web/tabs/tabs.js";
 import "@material/web/tabs/primary-tab.js";
 
-import { api, ApiError, type Activity, type Bill, type Category, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
+import { api, ApiError, type Activity, type Bill, type BillCategory, type Contact, type CustomCategory, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
-import { CATEGORY_META, CATEGORY_ORDER, categoryLabel } from "../categories";
+import { CATEGORY_ORDER, categoryInfo } from "../categories";
 import { forgetGroup, rememberGroup } from "../store";
 import { dispatch, navigate } from "../router";
 import { lang, locale, setLang, t, tn } from "../i18n";
@@ -53,11 +53,19 @@ interface State {
   version?: string;
   /** My member id (linked identity); null in view mode. */
   me: string | null;
+  /** The trip's own categories (v0.11). */
+  categories: CustomCategory[];
 }
 
 /** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
 /** Bumped by every renderGroup: re-rendering the same URL (language switch, claim) must not stack pollers. */
 let pageGen = 0;
+/** Email suggestions (v0.11), fetched once per page load of the app. */
+let contactsCache: Promise<Contact[]> | null = null;
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" | "view" = "edit") {
   const isView = mode === "view";
@@ -70,7 +78,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   if (!TABS.includes(tab) || (mode === "view" && tab === "activity")) tab = "bills";
   let viewAs: string | null = local.get(`share.viewAs:${gid}`);
   let query = "";
-  let catFilter: Category | null = null;
+  let catFilter: BillCategory | null = null;
   let onlyMine = false;
   let state: State;
 
@@ -88,7 +96,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           group: { ...v.group, id: "" },
           members: v.members.map((m) => ({ ...m, promptpay: null, email: null })),
           bills: v.bills.map((b) => ({ ...b, createdBy: null, hasReceipt: false, recurrenceId: null })),
-          summary: v.summary, recurring: [], activity: [], subgroups: [], me: null,
+          summary: v.summary, recurring: [], activity: [], subgroups: [], me: null, categories: v.categories ?? [],
         };
       } else {
         let p: PageData;
@@ -251,6 +259,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       item(t("menu.exportCsv"), "table_view", "export-csv", exportCsv),
       item(t("menu.print"), "print", "export-print", printPdf),
       item(t("menu.image"), "image", "export-image", () => void summaryImage()),
+      item(t("keys.menu"), "keyboard", "shortcuts-help", () => void shortcutsHelp()),
       item(t("menu.themeChange", { label: themeLabel[currentTheme()] }), currentTheme() === "dark" ? "dark_mode" : currentTheme() === "light" ? "light_mode" : "contrast", "theme-toggle",
         () => { setTheme(next[currentTheme()]); snackbar(themeLabel[currentTheme()]); }),
       item(t("lang.switchTo"), "translate", "lang-toggle", () => { setLang(lang() === "th" ? "en" : "th"); dispatch(); }),
@@ -278,14 +287,27 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       budget.suffixText = cur.value;
       if (!budgetTouched) budget.value = state.group.budget ? toInput(state.group.budget, cur.value) : "";
     });
+    const startF = h("md-outlined-text-field", { label: t("dates.start"), type: "date", value: state.group.startDate ?? "", dataset: { testid: "edit-group-start" } }) as Field;
+    const endF = h("md-outlined-text-field", { label: t("dates.end"), type: "date", value: state.group.endDate ?? "", dataset: { testid: "edit-group-end" } }) as Field;
     const err = h("div", { class: "form-error", role: "alert" });
     const archived = state.group.archived;
     const d = h("md-dialog", { dataset: { testid: "settings-dialog" } },
       h("div", { slot: "headline" }, t("menu.settings")),
       h("div", { slot: "content", class: "stack" },
         !archived && name, !archived && cur, !archived && budget,
+        !archived && h("div", { class: "row wrap" }, h("div", { class: "grow" }, startF), h("div", { class: "grow" }, endF)),
         !archived && h("p", { class: "md-typescale-body-small muted" }, t("settings.currencyNote")),
         await viewLinkSection(),
+        !archived && h("div", { class: "stack-sm", dataset: { testid: "settings-categories" } },
+          h("h2", { class: "md-typescale-title-small" }, t("cat.title")),
+          h("p", { class: "md-typescale-body-small muted" }, t("cat.help")),
+          h("md-chip-set", { "aria-label": t("cat.title") },
+            state.categories.map((c) => {
+              const info = categoryInfo(`c:${c.id}`, state.categories);
+              return h("md-assist-chip", { label: info.label, dataset: { testid: "settings-cat" }, onclick: () => { d.close("cancel"); void editCategory(c); } }, icon(info.icon, "icon"));
+            }),
+            h("md-assist-chip", { label: t("cat.new"), dataset: { testid: "settings-cat-new" }, onclick: () => { d.close("cancel"); void editCategory(); } }, icon("add", "icon")))),
+        await pushSection(),
         !archived && h("div", { class: "stack-sm" },
           h("h2", { class: "md-typescale-title-small" }, t("settings.merge")),
           h("md-outlined-button", { dataset: { testid: "merge-group" }, onclick: () => { d.close("cancel"); void mergeFlow(); } },
@@ -316,8 +338,18 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
             budget.errorText = t("budget.invalid");
             return;
           }
+          const startDate = startF.value || null;
+          const endDate = endF.value || null;
+          if (startDate && endDate && endDate < startDate) {
+            endF.error = true;
+            endF.errorText = t("dates.order");
+            return;
+          }
           try {
-            await api.updateGroup(gid, { name: name.value, currency: cur.value, ...(b !== state.group.budget ? { budget: b } : {}) });
+            await api.updateGroup(gid, {
+              name: name.value, currency: cur.value, ...(b !== state.group.budget ? { budget: b } : {}),
+              ...(startDate !== state.group.startDate ? { startDate } : {}), ...(endDate !== state.group.endDate ? { endDate } : {}),
+            });
             d.close("ok");
           } catch (e) {
             err.textContent = e instanceof Error ? e.message : t("common.saveFailed");
@@ -326,6 +358,43 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     ) as MdDialog;
     if ((await openDialog(d)) === "ok") refresh();
   }
+
+  async function editCategory(c?: CustomCategory) {
+    const { editCategoryDialog } = await import("./categories-dialog");
+    const saved = await editCategoryDialog(gid, c, c ? async () => {
+      await api.deleteCategory(gid, c.id);
+      snackbar(t("cat.deleted", { name: c.name }));
+    } : undefined);
+    if (saved || c) refresh();
+  }
+
+  /** Notifications on/off for this browser (v0.11, #6). */
+  async function pushSection() {
+    if (isView) return null;
+    const mod = await import("../push");
+    const on = !!(await mod.currentSubscription().catch(() => null));
+    const help = h("p", { class: "md-typescale-body-small muted" }, mod.pushSupported() ? t("push.help") : t("push.unsupported"));
+    const btn = h("md-outlined-button", { dataset: { testid: "push-toggle" }, disabled: !mod.pushSupported(), onclick: async () => {
+      try {
+        if (on) {
+          await mod.disablePush();
+          snackbar(t("push.off"));
+        } else {
+          const r = await mod.enablePush();
+          snackbar(r === "on" ? t("push.on") : r === "denied" ? t("push.denied") : t("push.unsupported"));
+        }
+      } catch (e) {
+        snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
+      }
+      editGroupAgain();
+    } }, icon(on ? "notifications_off" : "notifications", "icon"), on ? t("push.turnOff") : t("push.turnOn"));
+    return h("div", { class: "stack-sm" }, h("h2", { class: "md-typescale-title-small" }, t("push.title")), help, btn);
+  }
+  /** Re-open Settings so the notifications button shows its new state. */
+  const editGroupAgain = () => {
+    document.querySelector<MdDialog>("md-dialog[data-testid=settings-dialog]")?.close("cancel");
+    setTimeout(() => void editGroup(), 0);
+  };
 
   async function deleteGroupFlow() {
     const field = h("md-outlined-text-field", { label: t("delete.confirmLabel"), dataset: { testid: "delete-confirm-input" } }) as Field;
@@ -371,13 +440,18 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
 
   function overlayPending() {
     const waiting = isView ? [] : queued(gid);
+    queuedIds = new Set(waiting.map((q) => q.shown.id));
     if (!pending.size && !waiting.length) {
       state.bills = server.bills;
       state.summary = server.summary;
       return;
     }
     let bills = [...server.bills];
-    for (const q of waiting) if (!pending.has(q.shown.id)) bills.push(q.shown);
+    for (const q of waiting) {
+      if (pending.has(q.shown.id)) continue;
+      if (q.op === "update" || q.op === "delete") bills = bills.filter((b) => b.id !== q.shown.id);
+      if (q.op !== "delete") bills.push(q.shown);
+    }
     for (const op of pending.values()) {
       bills = bills.filter((b) => b.id !== op.id);
       if (op.bill) bills.push(op.bill);
@@ -399,9 +473,15 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       },
       (e) => {
         pending.delete(op.id);
-        // No connection (#8): keep a new bill on this device and send it when we're back online.
-        const offline = e instanceof ApiError && e.code === "network" && !!op.input && !!op.bill &&
-          enqueue(gid, { ref: op.id.slice(4), input: op.input, shown: op.bill, queuedAt: new Date().toISOString() });
+        // No connection (#8): keep the change on this device and send it when we're back online — new bills,
+        // and (v0.11) edits and deletes. A second offline change to the same bill replaces the first (same base).
+        const queuedAt = new Date().toISOString();
+        const isNew = op.id.startsWith("tmp-");
+        const earlier = queued(gid).find((q) => q.ref === op.id);
+        const offline = e instanceof ApiError && e.code === "network" && (
+          isNew ? !!op.input && !!op.bill && enqueue(gid, { ref: op.id.slice(4), op: "create", input: op.input, shown: op.bill, queuedAt })
+            : op.bill ? !!op.input && enqueue(gid, { ref: op.id, op: "update", input: op.input, base: earlier?.base ?? op.base, shown: op.bill, queuedAt })
+              : !!op.original && enqueue(gid, { ref: op.id, op: "delete", shown: earlier?.shown ?? op.original, queuedAt }));
         overlayPending();
         if (!stillHere()) return;
         render();
@@ -423,12 +503,20 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     try {
       for (const q of items) {
         try {
-          await api.createBill(gid, { ...q.input, clientRef: q.ref });
+          if (q.op === "update") await api.updateBill(gid, q.ref, { ...q.input!, ifUpdatedAt: q.base });
+          else if (q.op === "delete") await api.deleteBill(gid, q.ref).catch((e) => { if (!(e instanceof ApiError && e.status === 404)) throw e; });
+          else await api.createBill(gid, { ...q.input!, clientRef: q.ref });
           dequeue(gid, q.ref);
           sent++;
         } catch (e) {
           // Still offline, signed out (kept until the sign-in), busy or down: try again later.
           if (e instanceof ApiError && (e.code === "network" || e.code === "signed_out" || e.status === 429 || e.status >= 500)) break;
+          if (q.op === "update" && e instanceof ApiError && (e.code === "stale" || e.status === 404)) {
+            // Someone else changed (or deleted) it meanwhile: theirs stays; offer to apply mine again by hand.
+            dequeue(gid, q.ref);
+            snackbar(t("offline.stale", { desc: q.shown.description }), e.code === "stale" ? { label: t("bill.editAgain"), run: () => void editBillById(q.ref) } : undefined);
+            continue;
+          }
           // Refused (e.g. a person was removed meanwhile): drop it, offer to enter it again.
           dequeue(gid, q.ref);
           const msg = e instanceof Error ? e.message : t("common.saveFailed");
@@ -454,7 +542,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   }
 
   const billOpts = () => ({
-    group: state.group, members: state.members, bills: state.bills, viewAs, subgroups: state.subgroups,
+    group: state.group, members: state.members, bills: state.bills, viewAs, subgroups: state.subgroups, categories: state.categories,
     onDeleted: undoable, onDuplicate: (b: Bill) => void duplicateBill(b), onSaving: track,
   });
   const openBillDialog = async (o: Parameters<Awaited<ReturnType<typeof loadBillDialog>>["openBillDialog"]>[0]) =>
@@ -465,12 +553,20 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     if (await openBillDialog({ ...billOpts(), template: b })) refresh();
   }
 
-  const isQueued = (id: string) => id.startsWith("tmp-") && !pending.has(id);
+  /** Bills with a change waiting on this device (offline queue); refreshed by overlayPending. */
+  let queuedIds = new Set<string>();
+  const isQueued = (id: string) => queuedIds.has(id) && !pending.has(id);
+
+  async function editBillById(id: string) {
+    await refresh();
+    const b = state.bills.find((x) => x.id === id);
+    if (b) void editBill(b);
+  }
 
   function swipeDelete(b: Bill) {
     if (pending.has(b.id) || isQueued(b.id)) return;
     const done = api.deleteBill(gid, b.id).then(() => null);
-    track({ id: b.id, bill: null, done });
+    track({ id: b.id, bill: null, done, original: b });
     undoable(b, done);
   }
 
@@ -485,7 +581,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     if (readOnly()) return snackbar(t("group.archivedEdit"));
     if (isQueued(bill.id)) {
       return snackbar(t("offline.waitingEdit"), { label: t("offline.discard"), run: () => {
-        dequeue(gid, bill.id.slice(4));
+        dequeue(gid, bill.id.startsWith("tmp-") ? bill.id.slice(4) : bill.id);
         overlayPending();
         render();
       } });
@@ -507,7 +603,16 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       label: t("common.undo"),
       run: async () => {
         try {
-          if (deleting && !(await deleting.then(() => true, () => false))) return; // never deleted: nothing to undo
+          if (deleting && !(await deleting.then(() => true, () => false))) {
+            // Never reached the server. Queued offline: just drop it from the queue (v0.11).
+            if (queued(gid).some((q) => q.op === "delete" && q.ref === bill.id)) {
+              dequeue(gid, bill.id);
+              overlayPending();
+              render();
+              snackbar(t("bill.restored"));
+            }
+            return;
+          }
           await api.restoreBill(gid, bill.id);
           snackbar(t("bill.restored"));
           refresh();
@@ -526,6 +631,21 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       supportingText: isMe ? t("member.emailYou") : t("member.emailHelp"), disabled: isMe || !!m?.email?.startsWith("svc:"),
       dataset: { testid: "member-email-input" },
     }) as Field & { disabled: boolean };
+    // People from my other trips (v0.11, #9): tap one to fill the email.
+    const suggestions = h("md-chip-set", { class: "chip-scroll", "aria-label": t("contacts.label"), dataset: { testid: "contact-suggestions" } });
+    const taken = new Set(state.members.map((x) => x.email).filter(Boolean));
+    const showSuggestions = async () => {
+      if (email.disabled) return;
+      const all = (contactsCache ??= api.contacts().then((r) => r.contacts, () => [] as Contact[]));
+      const q = email.value.trim().toLowerCase();
+      const who = name.value.trim().toLowerCase();
+      const list = (await all).filter((c) => !taken.has(c.email) && (q ? c.email.includes(q) || c.name.toLowerCase().includes(q) : !!who && c.name.toLowerCase().startsWith(who)));
+      clear(suggestions, list.slice(0, 5).map((c) =>
+        h("md-assist-chip", { label: `${c.name} · ${c.email}`, dataset: { testid: "contact-suggestion" }, onclick: () => { email.value = c.email; clear(suggestions); } })));
+    };
+    email.addEventListener("input", () => void showSuggestions());
+    email.addEventListener("focus", () => void showSuggestions());
+    name.addEventListener("input", () => { if (!email.value) void showSuggestions(); });
     const pp = h("md-outlined-text-field", {
       label: t("member.promptpayLabel"), value: m?.promptpay ?? "", inputMode: "numeric",
       supportingText: t("member.promptpayHelp"),
@@ -564,7 +684,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     }, icon("person_pin", "icon"), t("member.thisIsMe"));
     const d = h("md-dialog", { dataset: { testid: "member-dialog" } },
       h("div", { slot: "headline" }, m ? t("member.edit", { name: m.name }) : t("member.add")),
-      h("form", { slot: "content", class: "stack", onsubmit: (e: Event) => { e.preventDefault(); save(); } }, name, email, pp, thisIsMe),
+      h("form", { slot: "content", class: "stack", onsubmit: (e: Event) => { e.preventDefault(); save(); } }, name, email, suggestions, pp, thisIsMe),
       h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")),
         h("md-filled-button", { onclick: save, dataset: { testid: "member-save" } }, t("common.save")))) as MdDialog;
     d.addEventListener("opened", () => name.focus(), { once: true });
@@ -626,7 +746,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       oninput: (e: Event) => { query = (e.target as Field).value; renderList(); },
     });
     search.prepend(icon("search", "leading-icon"));
-    const usedCats = CATEGORY_ORDER.filter((c) => bills.some((b) => b.category === c));
+    const usedCats = [...CATEGORY_ORDER, ...state.categories.map((c) => `c:${c.id}` as const)].filter((c) => bills.some((b) => b.category === c));
     const catChips = h("md-chip-set", { class: "chip-scroll", "aria-label": t("bills.filterCat") },
       viewAs && (() => {
         const c = h("md-filter-chip", { label: t("bills.only", { name: memberName(viewAs) }), selected: onlyMine, dataset: { testid: "filter-mine" } }) as HTMLElement & { selected: boolean };
@@ -634,8 +754,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         return c;
       })(),
       usedCats.length > 1 && usedCats.map((cat) => {
-        const c = h("md-filter-chip", { label: categoryLabel(cat), selected: catFilter === cat, dataset: { testid: `filter-cat-${cat}` } }) as HTMLElement & { selected: boolean };
-        c.prepend(icon(CATEGORY_META[cat].icon, "icon"));
+        const info = categoryInfo(cat, state.categories);
+        const c = h("md-filter-chip", { label: info.label, selected: catFilter === cat, dataset: { testid: `filter-cat-${cat}` } }) as HTMLElement & { selected: boolean };
+        c.prepend(icon(info.icon, "icon"));
         c.addEventListener("click", (e) => {
           e.preventDefault();
           catFilter = catFilter === cat ? null : cat;
@@ -667,7 +788,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           b.hasReceipt && t("bills.receipt"),
           b.commentCount > 0 && tn("bills.comments", b.commentCount),
         ].filter(Boolean).join(" · ");
-        const cat = isPayment ? { icon: "payments" as const, label: t("bill.payment") } : { icon: CATEGORY_META[b.category].icon, label: categoryLabel(b.category) };
+        const cat = isPayment ? { icon: "payments" as const, label: t("bill.payment") } : categoryInfo(b.category, state.categories);
         const saving = pending.has(b.id);
         const waiting = !saving && isQueued(b.id);
         items.push(h("md-list-item", {
@@ -702,8 +823,51 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       listHost);
   }
 
+  /** "12–18 Oct" from the trip dates (v0.11). */
+  function tripDates(): string | null {
+    const { startDate: s, endDate: e } = state.group;
+    if (!s && !e) return null;
+    const d = (x: string) => new Date(`${x}T00:00:00`);
+    const f = new Intl.DateTimeFormat(locale(), { day: "numeric", month: "short" });
+    if (s && e) return f.formatRange(d(s), d(e));
+    return s ? t("dates.from", { date: f.format(d(s)) }) : t("dates.until", { date: f.format(d(e!)) });
+  }
+
+  /**
+   * Spending per day (v0.11, #7): expenses by bill date, over the trip dates when set (else first → last bill).
+   * One column per day, ≤ 62 days (longer: the last 62).
+   */
+  function dayChart() {
+    const expenses = state.bills.filter((b) => b.kind === "expense");
+    if (!expenses.length) return null;
+    const dates = expenses.map((b) => b.date).sort();
+    const from = state.group.startDate && state.group.startDate < dates[0] ? state.group.startDate : dates[0];
+    const to = state.group.endDate && state.group.endDate > dates[dates.length - 1] ? state.group.endDate : dates[dates.length - 1];
+    const days: string[] = [];
+    for (let t0 = Date.parse(`${from}T00:00:00Z`); t0 <= Date.parse(`${to}T00:00:00Z`); t0 += 86_400_000) days.push(new Date(t0).toISOString().slice(0, 10));
+    if (days.length < 2) return null;
+    const shown = days.slice(-62);
+    const sums = new Map<string, number>();
+    for (const b of expenses) sums.set(b.date, (sums.get(b.date) ?? 0) + b.amount);
+    const max = Math.max(1, ...shown.map((d) => sums.get(d) ?? 0));
+    const total = shown.reduce((a, d) => a + (sums.get(d) ?? 0), 0);
+    const label = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString(locale(), { weekday: "short", day: "numeric", month: "short" });
+    const today = localToday();
+    return h("section", { class: "card flush", "aria-labelledby": "day-chart-title" },
+      h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "day-chart-title" }, t("chart.perDay")),
+        h("span", { class: "md-typescale-body-medium muted tabular", dataset: { testid: "day-avg" } }, t("chart.avgDay", { amount: money(Math.round(total / shown.length)) }))),
+      h("div", { class: "day-chart", role: "list", dataset: { testid: "day-chart" } },
+        shown.map((d) => {
+          const v = sums.get(d) ?? 0;
+          return h("div", { class: `day-col ${d === today ? "today" : ""}`, role: "listitem", title: `${label(d)}: ${money(v)}`, "aria-label": `${label(d)}: ${money(v)}`, dataset: { testid: "day-bar" } },
+            h("div", { class: "day-fill", style: `height:${v ? Math.max(3, (v / max) * 100) : 0}%` }));
+        })),
+      h("div", { class: "day-axis md-typescale-body-small muted", "aria-hidden": "true" },
+        h("span", null, label(shown[0])), h("span", null, label(shown[shown.length - 1]))));
+  }
+
   function categoryChart() {
-    const entries = CATEGORY_ORDER.map((c) => [c, state.summary.byCategory[c] ?? 0] as const).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    const entries = (Object.entries(state.summary.byCategory) as [BillCategory, number][]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
     if (!entries.length) return null;
     const max = entries[0][1];
     const total = state.summary.total || 1;
@@ -712,8 +876,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       h("div", { class: "bar-chart", role: "list", dataset: { testid: "category-chart" } },
         entries.map(([c, v]) => {
           const pct = Math.round((v / total) * 100);
-          return h("div", { class: "bar-row", role: "listitem", title: `${categoryLabel(c)}: ${money(v)} (${pct}%)`, dataset: { testid: `cat-bar-${c}` } },
-            h("div", { class: "bar-label md-typescale-body-medium" }, icon(CATEGORY_META[c].icon), categoryLabel(c)),
+          const info = categoryInfo(c, state.categories);
+          return h("div", { class: "bar-row", role: "listitem", title: `${info.label}: ${money(v)} (${pct}%)`, dataset: { testid: `cat-bar-${c}` } },
+            h("div", { class: "bar-label md-typescale-body-medium" }, icon(info.icon), info.label),
             h("div", { class: "bar-track", "aria-hidden": "true" }, h("div", { class: "bar-fill", style: `width:${Math.max(2, (v / max) * 100)}%` })),
             h("div", { class: "bar-value md-typescale-body-medium tabular" }, money(v), h("span", { class: "muted" }, ` ${pct}%`)));
         })));
@@ -758,7 +923,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       actions.length > 0 && h("ul", { class: "hero-actions", "aria-label": t("summary.whoPays") }, actions),
       h("p", { class: "md-typescale-body-medium hero-sub hero-stats" },
         bal && h("span", { class: "tabular" }, `${t("hero.trip")} ${money(summary.total)} · `),
-        t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) })),
+        t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) }),
+        tripDates() && h("span", { dataset: { testid: "trip-dates" } }, ` · ${tripDates()}`)),
       budgetBar());
   }
 
@@ -771,7 +937,12 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     const text = spent > b
       ? t("budget.over", { amount: money(spent - b), budget: money(b) })
       : t("budget.left", { amount: money(b - spent), budget: money(b) });
-    return { text, used, tone: used > 1 ? "over" : used >= 0.8 ? "warn" : "ok" };
+    // With an end date (v0.11): what's left per day from today to the last day.
+    const today = localToday();
+    const end = state.group.endDate;
+    const daysLeft = end && end >= today && spent < b ? Math.round((Date.parse(end) - Date.parse(today < (state.group.startDate ?? today) ? state.group.startDate! : today)) / 86_400_000) + 1 : 0;
+    const pace = daysLeft > 0 ? tn("budget.pace", daysLeft, { amount: money(Math.floor((b - spent) / daysLeft)) }) : null;
+    return { text, used, tone: used > 1 ? "over" : used >= 0.8 ? "warn" : "ok", pace };
   }
 
   function budgetBar() {
@@ -782,6 +953,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       h("div", { class: "budget-top md-typescale-body-medium" },
         h("span", { class: "tabular", dataset: { testid: "budget-text" } }, bt.text),
         h("span", { class: "tabular budget-pct" }, `${pct}%`)),
+      bt.pace && h("div", { class: "md-typescale-body-small budget-pace tabular", dataset: { testid: "budget-pace" } }, bt.pace),
       h("div", { class: "budget-track", role: "progressbar", "aria-label": t("budget.label"), "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.min(pct, 100)) },
         h("div", { class: "budget-fill", style: `width:${Math.min(100, bt.used * 100)}%` })));
   }
@@ -824,6 +996,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         settlements),
       h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, t("summary.balances"))), balances),
       categoryChart(),
+      dayChart(),
       settleHistory(),
       statsMod && (() => {
         const st = statsMod!.computeStats(state.bills, state.members);
@@ -884,8 +1057,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         h("img", { src: url, alt: t("image.alt", { name: state.group.name }), class: "summary-image", dataset: { testid: "summary-image" } })),
       h("div", { slot: "actions" },
         h("md-text-button", { onclick: () => d.close("cancel") }, t("common.close")),
-        h("a", { href: url, download: filename, class: "link-button", dataset: { testid: "image-download" } },
-          h("md-outlined-button", { tabIndex: -1 }, icon("download", "icon"), t("image.download"))),
+        // One element (a link styled as a button): a button inside a link has no accessible name (axe, #13).
+        h("md-outlined-button", { href: url, download: filename, dataset: { testid: "image-download" } }, icon("download", "icon"), t("image.download")),
         canShare && h("md-filled-button", { dataset: { testid: "image-share" }, onclick: async () => {
           try { await navigator.share({ files: [file], title: state.group.name }); } catch { /* cancelled */ }
         } }, icon("share", "icon"), t("image.share")))) as MdDialog;
@@ -1148,6 +1321,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "group.rename": return t("act.groupRename", { to: nm("to") });
       case "group.currency": return t("act.groupCurrency", { from: nm("from"), to: nm("to") });
       case "group.archive": return t("act.groupArchive");
+      case "group.dates": return t("act.groupDates");
+      case "category.add": return t("act.categoryAdd", { name: nm("name") });
       case "group.delete": return t("act.groupDelete");
       case "group.restore": return t("act.groupRestore");
       case "group.budget": return d.to ? t("act.groupBudget", { amount: money(Number(d.to)) }) : t("act.groupBudgetOff");
@@ -1267,13 +1442,65 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       h("h2", null, t("tab.bills")),
       h("table", null, h("thead", null, h("tr", null, [t("print.date"), t("print.description"), t("print.category"), t("print.paidBy"), t("print.amount")].map((x) => h("th", null, x)))),
         h("tbody", null, state.bills.map((b) => h("tr", null,
-          h("td", null, b.date), h("td", null, b.description), h("td", null, b.kind === "payment" ? t("bill.payment") : categoryLabel(b.category)),
+          h("td", null, b.date), h("td", null, b.description), h("td", null, b.kind === "payment" ? t("bill.payment") : categoryInfo(b.category, state.categories).label),
           h("td", null, b.payers.map((p) => memberName(p.memberId)).join(" & ")), h("td", null, money(b.amount)))))));
   }
 
   // ---------- live refresh (#12): other people's changes show up without reloading ----------
   // Polls a tiny version token while the page is visible and reloads when it moved. Skips a beat while a dialog is
   // open or a save is in flight (a refresh then would fight the user); our own saves refresh themselves.
+  // ---------- keyboard shortcuts (#11): N new bill · / search · S settle up · H home · ? help ----------
+  function showTab(id: Tab) {
+    tab = id;
+    session.set(`tab:${gid}`, tab);
+    const tabs = root.querySelector("md-tabs") as (HTMLElement & { activeTabIndex: number }) | null;
+    if (tabs) tabs.activeTabIndex = TABS.indexOf(id);
+    const layout = root.querySelector<HTMLElement>("main.group-layout");
+    if (layout) layout.dataset.tab = id;
+  }
+
+  async function shortcutsHelp() {
+    const rows: [string, string][] = [["N", t("keys.new")], ["/", t("keys.search")], ["S", t("keys.settle")], ["H", t("keys.home")], ["?", t("keys.help")]];
+    const d = h("md-dialog", { dataset: { testid: "shortcuts-dialog" } },
+      h("div", { slot: "headline" }, t("keys.title")),
+      h("div", { slot: "content" },
+        h("dl", { class: "shortcuts" }, rows.map(([k, v]) => [h("dt", null, h("kbd", null, k)), h("dd", null, v)]))),
+      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("ok") }, t("common.close")))) as MdDialog;
+    await openDialog(d);
+  }
+
+  function startShortcuts() {
+    if (isView) return;
+    const keys: Record<string, () => void> = {
+      n: () => void addBill(),
+      "/": () => {
+        showTab("bills");
+        root.querySelector<HTMLElement>("[data-testid=bill-search]")?.focus();
+      },
+      s: () => {
+        showTab("summary");
+        const first = root.querySelector<HTMLElement>("[data-testid=settle-btn]") ?? root.querySelector<HTMLElement>("#pays-title");
+        first?.scrollIntoView({ block: "center" });
+        first?.focus();
+      },
+      h: () => navigate("/"),
+      "?": () => void shortcutsHelp(),
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!stillHere() || gen !== pageGen) return document.removeEventListener("keydown", onKey);
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      // Typing somewhere (the real target can sit inside a component's shadow DOM), or a dialog/menu is up.
+      const target = e.composedPath()[0] as HTMLElement | undefined;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (document.querySelector("md-dialog[open], md-menu[open]")) return;
+      const run = keys[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+      if (!run) return;
+      e.preventDefault();
+      run();
+    };
+    document.addEventListener("keydown", onKey);
+  }
+
   function startLiveRefresh() {
     if (isView) return;
     const every = Number(local.get("share.pollMs")) || 15_000; // E2E shortens it
@@ -1309,6 +1536,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   if ((await load()) && stillHere()) {
     render();
     startLiveRefresh();
+    startShortcuts();
     if (!offlineAt) void flushOutbox();
     // Fetch the bill dialog once the page is up (still not in the first paint): adding a bill then works even if
     // the connection drops before the first Add (#8), with or without the service worker.

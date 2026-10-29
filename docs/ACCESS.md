@@ -13,7 +13,7 @@
      update it, or every request gets 401.
    - Worker 401s any request lacking a valid `Cf-Access-Jwt-Assertion`. Identity = JWT `email`, or
      `svc:<client id>` for service tokens (tests). A trip opens only for identities linked to one of its people.
-   - Local dev / tests don't use Access: `wrangler dev --var DEV_IDENTITY:1` trusts the
+   - Local dev / tests don't use Access: `wrangler dev --local --var DEV_IDENTITY:1` trusts the
      `Cf-Access-Authenticated-User-Email` header (default `dev@example.com`). Never set DEV_IDENTITY on prod.
 4. Verify: `npm run test:prod`. With a token present, the security suite also asserts that requests
    **without** the token are blocked (302/401/403).

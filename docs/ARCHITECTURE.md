@@ -136,6 +136,22 @@ batches far more (ISSUES #28). Rules:
 - The bill dialog chunk is prefetched shortly after the trip page renders, so Add works if the connection drops
   before the first Add even without the service worker.
 
+## v0.11 additions
+
+- **Receipt scan** (`src/lib/scan.ts`, `POST …/scan`): Workers AI binding `AI`, Llama 4 Scout with a JSON schema; the
+  answer is untrusted → `normalizeScan` keeps only clean values (amounts → minor units of the right currency, dates
+  not in the future, known categories, bounded text). `SCAN_LIMIT` rate limit (10/min/identity). Local dev / tests:
+  `SCAN_FAKE=1` → canned answer. The binding forces a remote session in `wrangler dev`, so dev/tests run `--local`.
+- **Web Push** (`src/lib/webpush.ts`, `src/routes-v11.ts`): `push_subscriptions` (endpoint, identity, keys, lang;
+  ≤ 10 per identity). After a bill create (`waitUntil`), everyone else linked to the trip gets an aes128gcm-encrypted
+  message signed with VAPID (`VAPID_PUBLIC_KEY` var, `VAPID_PRIVATE_KEY` secret); 404/410 from the push service
+  deletes the row. Endpoints are allow-listed to browser push services (SSRF). The service worker shows it and opens
+  the trip on tap. Endpoints are capability URLs: never logged, not in backups.
+- **Trip categories**: table `categories`; bills store `c:<id>`; `parseBill` accepts it only for the trip's own ids
+  (`billWriteContext` loads them). Recurring series whose category was deleted continue as `other`.
+- **Offline edits/deletes**: the outbox (`web/src/offline.ts`) holds `op: create | update | delete`; updates carry
+  `ifUpdatedAt` (server: 409 `stale` if the bill changed).
+
 ## Security model
 
 - Authentication: **Cloudflare Access** in front of the whole hostname, and the Worker verifies

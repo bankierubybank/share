@@ -41,16 +41,16 @@ export async function revokeInvite(db: D1Database, gid: string, actor: string | 
   ]);
 }
 
-interface InviteRow { id: string; name: string; currency: string; archived_at: string | null; created_at: string; budget: number | null; invite_expires: string }
+interface InviteRow { id: string; name: string; currency: string; archived_at: string | null; created_at: string; budget: number | null; start_date: string | null; end_date: string | null; invite_expires: string }
 
 /** The trip behind a live (not expired) invite token, or null. */
 export async function groupByInvite(db: D1Database, token: string): Promise<(Group & { expiresAt: string }) | null> {
   const r = await db
-    .prepare("SELECT id, name, currency, archived_at, created_at, budget, invite_expires FROM groups WHERE invite_hash = ? AND deleted_at IS NULL")
+    .prepare("SELECT id, name, currency, archived_at, created_at, budget, start_date, end_date, invite_expires FROM groups WHERE invite_hash = ? AND deleted_at IS NULL")
     .bind(await hashToken(token))
     .first<InviteRow>();
   if (!r || r.invite_expires <= new Date().toISOString()) return null;
-  return { id: r.id, name: r.name, currency: r.currency, archived: r.archived_at !== null, createdAt: r.created_at, budget: r.budget, expiresAt: r.invite_expires };
+  return { id: r.id, name: r.name, currency: r.currency, archived: r.archived_at !== null, createdAt: r.created_at, budget: r.budget, startDate: r.start_date, endDate: r.end_date, expiresAt: r.invite_expires };
 }
 
 /** Links `identity` to an existing, still unlinked person. "taken" = someone else got there first. */

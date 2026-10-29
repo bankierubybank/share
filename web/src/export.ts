@@ -1,6 +1,6 @@
 // CSV export of a group's bills, balances and settlements.
 import { CATEGORY_META } from "./categories";
-import type { Bill, Group, Member, Summary } from "./api";
+import type { Bill, CustomCategory, Group, Member, Summary } from "./api";
 import { toInput } from "./money";
 import { en } from "./i18n";
 
@@ -20,7 +20,7 @@ function row(cells: string[]): string {
   return cells.map(field).join(",");
 }
 
-export function billsToCsv(input: { group: Group; members: Member[]; bills: Bill[]; summary: Summary }): string {
+export function billsToCsv(input: { group: Group; members: Member[]; bills: Bill[]; summary: Summary; categories?: CustomCategory[] }): string {
   const { group, members, summary } = input;
   const cur = group.currency;
   const money = (n: number) => toInput(n, cur);
@@ -41,7 +41,13 @@ export function billsToCsv(input: { group: Group; members: Member[]; bills: Bill
       row([
         b.date,
         b.kind === "payment" ? "Payment" : "Expense",
-        text(b.kind === "payment" ? "" : (() => { const k = (CATEGORY_META as Record<string, { key: keyof typeof en }>)[b.category ?? ""]?.key; return k ? en[k] : b.category ?? ""; })()),
+        text(b.kind === "payment" ? "" : (() => {
+          const c = b.category ?? "";
+          // A trip's own category (v0.11): its name; deleted → Other.
+          if (c.startsWith("c:")) return input.categories?.find((x) => `c:${x.id}` === c)?.name ?? en["category.misc"];
+          const k = (CATEGORY_META as Record<string, { key: keyof typeof en }>)[c]?.key;
+          return k ? en[k] : c;
+        })()),
         text(b.description),
         money(b.amount),
         cur,

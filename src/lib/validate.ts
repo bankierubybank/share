@@ -17,6 +17,14 @@ export const LIMITS = {
 
 export const CATEGORIES = ["food", "groceries", "lodging", "transport", "activities", "shopping", "utilities", "other"] as const;
 export type Category = (typeof CATEGORIES)[number];
+/** A bill's category: built-in, or "c:<id>" = one of the trip's own (v0.11). */
+export type BillCategory = Category | `c:${string}`;
+/** Icons a trip's own category may use (v0.11). Keep in sync with CUSTOM_ICONS in web/src/categories.ts. */
+export const CUSTOM_ICONS = [
+  "label", "flight", "train", "local_gas_station", "local_cafe", "local_bar", "restaurant", "shopping_cart", "hotel",
+  "directions_car", "local_activity", "shopping_bag", "celebration", "spa", "hiking", "beach_access", "fitness_center",
+  "sports_soccer", "pets", "medical_services", "school", "sell", "bolt", "receipt",
+] as const;
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -108,6 +116,9 @@ export interface GroupPatch {
   archived?: boolean;
   /** null clears it. */
   budget?: number | null;
+  /** Trip dates (v0.11), YYYY-MM-DD; null clears. */
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 export function parseGroupPatch(body: unknown): GroupPatch {
@@ -123,6 +134,9 @@ export function parseGroupPatch(body: unknown): GroupPatch {
     if (body.budget !== null && (!Number.isSafeInteger(body.budget) || (body.budget as number) <= 0 || (body.budget as number) > LIMITS.amountMax))
       fail(`budget must be null or a positive integer of minor units ≤ ${LIMITS.amountMax}`);
     out.budget = body.budget as number | null;
+  }
+  for (const k of ["startDate", "endDate"] as const) {
+    if (body[k] !== undefined) out[k] = body[k] === null ? null : cleanDate(body[k], k);
   }
   if (!Object.keys(out).length) fail("nothing to update");
   return out;
@@ -170,7 +184,7 @@ export interface BillInput {
   amount: number;
   payers: Share[];
   date: string;
-  category: Category;
+  category: BillCategory;
   splitMode: SplitMode;
   /** Normalized split as sent (for editing). */
   split: Record<string, unknown>;
@@ -213,14 +227,16 @@ const positive = (shares: Share[]) => shares.filter((s) => s.amount > 0);
  * Amount rules: itemized → computed from items; fx → converted from fx.amount; otherwise `amount`.
  * When computed, a provided `amount` must match (lets clients show the same number first).
  */
-export function parseBill(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string): BillInput {
+/** `customIds`: the trip's own category ids (v0.11) — "c:<id>" is accepted only for those. */
+export function parseBill(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string, customIds: ReadonlySet<string> = new Set()): BillInput {
   if (!isObj(body)) fail("body must be an object");
   const kind = body.kind === undefined ? "expense" : body.kind;
   if (kind !== "expense" && kind !== "payment") fail("kind must be 'expense' or 'payment'");
   const description = cleanName(body.description, "description", LIMITS.descriptionMax);
   const date = cleanDate(body.date);
-  const category = (body.category === undefined ? "other" : body.category) as Category;
-  if (!CATEGORIES.includes(category)) fail(`category must be one of ${CATEGORIES.join(", ")}`);
+  const category = (body.category === undefined ? "other" : body.category) as BillCategory;
+  const custom = typeof category === "string" && category.startsWith("c:") && customIds.has(category.slice(2));
+  if (!custom && !CATEGORIES.includes(category as Category)) fail(`category must be one of ${CATEGORIES.join(", ")} or one of the trip's own`);
   const split = body.split;
   if (!isObj(split)) fail("split is required");
 
@@ -336,7 +352,7 @@ export interface RecurrenceInput {
 export const RECURRENCE_BACKFILL_DAYS = 92;
 
 /** `today` (YYYY-MM-DD, UTC) is injectable for tests. */
-export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string, today?: string): RecurrenceInput {
+export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, groupCurrency: string, today?: string, customIds?: ReadonlySet<string>): RecurrenceInput {
   if (!isObj(body)) fail("body must be an object");
   if (body.frequency !== "weekly" && body.frequency !== "monthly") fail("frequency must be 'weekly' or 'monthly'");
   const startDate = cleanDate(body.startDate, "startDate");
@@ -345,7 +361,7 @@ export function parseRecurrence(body: unknown, memberIds: ReadonlySet<string>, g
   if (days < -RECURRENCE_BACKFILL_DAYS || days > 366) fail(`startDate must be within the last ${RECURRENCE_BACKFILL_DAYS} days and the next year`);
   if (!isObj(body.bill)) fail("bill is required");
   const { date: _ignored, ...template } = body.bill;
-  const b = parseBill({ ...template, date: startDate }, memberIds, groupCurrency);
+  const b = parseBill({ ...template, date: startDate }, memberIds, groupCurrency, customIds);
   if (b.kind !== "expense") fail("only expenses can repeat");
   return { frequency: body.frequency, startDate, template };
 }

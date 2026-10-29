@@ -1,12 +1,12 @@
 {
   "name": "share",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "Bill-splitting web app (Splitwise/KittySplit style) on Cloudflare Workers + D1",
   "scripts": {
     "build": "vite build",
-    "dev": "npm run build && wrangler dev --port 8787 --var DEV_IDENTITY:1",
+    "dev": "npm run build && wrangler dev --local --port 8787 --var DEV_IDENTITY:1 --var SCAN_FAKE:1",
     "db:migrate:local": "wrangler d1 migrations apply share-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply share-db --remote",
     "db:verify": "bash scripts/verify-migration.sh",

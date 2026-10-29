@@ -3,7 +3,8 @@
 // Restore: scripts/restore-backup.mjs → SQL file → `wrangler d1 execute --file`.
 
 /** FK order: parents first, so a restore can insert in this order. */
-export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups"] as const;
+// push_subscriptions are left out on purpose: endpoints are capability URLs, and a browser re-subscribes anyway.
+export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups", "categories"] as const;
 const PAGE = 1000;
 export const BACKUP_RETENTION_DAYS = 30;
 
