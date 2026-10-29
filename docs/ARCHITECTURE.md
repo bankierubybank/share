@@ -99,6 +99,26 @@ batches far more (ISSUES #28). Rules:
   `src/lib/summary.ts` — the Worker's own code); the server answer replaces it, a failure rolls back with an
   "Edit" action that reopens what was typed. Recurring bills, moves, people and settings still wait for the server.
 - Avoid per-item query loops (see `createOccurrences`).
+- **Home overview** (0.8, `src/db-overview.ts`): my position in every trip + spending by month is SQL aggregation
+  in one batch (2 statements), never "load every trip". It mirrors `computeBalances` (net = paid − owed on expenses
+  ± payments; legacy bills without `bill_payers` rows count `paid_by`); `test/integration/overview.test.ts` pins it
+  to the per-trip summary.
+- **Live refresh** (0.8): the trip page polls `GET …/version` every 15 s while visible (and right away when the
+  tab comes back), reloading `/full` only when the token moved. It skips a beat while a dialog is open or a save
+  is pending, and says "Updated with changes from others" only if the page didn't refresh itself in the last 10 s.
+  ~4 cheap requests/min per open tab, well inside the per-identity rate limit.
+
+## PWA (0.8)
+
+- Installable: `web/public/manifest.webmanifest` (PNG 192/512 + maskable 512 rendered from the SVGs by
+  `scripts/render-icons.mjs`; `apple-touch-icon.png` for iOS "Add to Home Screen"). The manifest link uses
+  `crossorigin="use-credentials"` — it sits behind Cloudflare Access, and a credential-less fetch would get the
+  login redirect instead of JSON.
+- `web/public/sw.js` only serves hashed `/assets/*` cache-first (immutable); pages, `/api`, manifest and icons go to
+  the network untouched, so Access redirects and fresh data behave exactly as without it. Served `no-cache`
+  (`_headers`). "Install app" button on home appears when the browser offers `beforeinstallprompt` (`web/src/pwa.ts`).
+- E2E runs with `serviceWorkers: "block"` (a worker's own fetches would bypass the per-origin Access route on prod);
+  `test/e2e/v8.spec.ts` opts back in locally.
 
 ## Security model
 

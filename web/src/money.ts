@@ -12,8 +12,27 @@ const REGION_CURRENCY: Record<string, string> = {
   SE: "SEK", NO: "NOK", DK: "DKK", DE: "EUR", FR: "EUR", ES: "EUR", IT: "EUR", NL: "EUR", IE: "EUR",
 };
 
+const LAST_CURRENCY_KEY = "share.lastCurrency";
+
+/** The currency of the trip just created: the next new trip defaults to it. */
+export function rememberCurrency(c: string) {
+  try { localStorage.setItem(LAST_CURRENCY_KEY, c); } catch { /* private mode */ }
+}
+
+/**
+ * New-trip currency (#24): what you used last time; else THB when anything says Thailand (Thai in the app or
+ * browser languages, or a Bangkok clock — an English browser on a Thai phone used to get USD); else the
+ * browser region's currency; else USD.
+ */
 export function defaultCurrency(): string {
   try {
+    const last = localStorage.getItem(LAST_CURRENCY_KEY);
+    if (last && CURRENCIES.includes(last)) return last;
+  } catch { /* private mode */ }
+  try {
+    const langs = [lang(), ...(navigator.languages ?? [navigator.language])];
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (langs.some((l) => /^th\b/i.test(l)) || tz === "Asia/Bangkok") return "THB";
     const region = new Intl.Locale(navigator.language).maximize().region ?? "";
     return REGION_CURRENCY[region] ?? "USD";
   } catch {

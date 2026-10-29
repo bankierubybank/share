@@ -192,7 +192,8 @@ test("onboarding: sample data + dismissible tips (#17)", async ({ browser, baseU
   // "Try sample" shows only with no trips at all (v0.4: home lists the server's trips for this identity), so this
   // needs a brand-new person: possible locally only (DEV_IDENTITY header); the prod service token always has trips.
   test.skip(!/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseURL!), "needs a fresh identity (local only)");
-  const ctx = await contextAs(browser, baseURL!, `new-${uniq()}@example.com`);
+  const email = `new-${uniq()}@example.com`;
+  const ctx = await contextAs(browser, baseURL!, email);
   const page = await ctx.newPage();
   await page.goto("/");
   await page.getByTestId("try-sample").click();
@@ -203,7 +204,8 @@ test("onboarding: sample data + dismissible tips (#17)", async ({ browser, baseU
   await page.reload();
   await expect(page.getByTestId("group-title")).toHaveText("Sample trip");
   await expect(page.getByTestId("tips")).toHaveCount(0);
-  await ctx.request.delete(`/api/groups/${page.url().split("/g/")[1]}`);
+  // ctx.request skips the context's routes: send the identity, or it runs as the dev user (not in this trip).
+  expect((await ctx.request.delete(`/api/groups/${page.url().split("/g/")[1]}`, { headers: { "cf-access-authenticated-user-email": email } })).status()).toBe(204);
   await ctx.close();
 });
 

@@ -48,6 +48,6 @@ test("home: returning users see their trips before the new-trip form", async ({ 
   await page.getByTestId("nav-home").click();
   await expect(page.getByTestId("trip-mine").filter({ hasText: name })).toBeVisible();
   // DOM order = reading order (phones stack it; laptops put it in the left column).
-  const first = await page.locator(".home-grid > section").first().getAttribute("class");
+  const first = await page.locator(".home-grid > *").first().getAttribute("class");
   expect(first).not.toContain("new-trip");
 });

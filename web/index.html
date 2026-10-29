@@ -8,7 +8,9 @@
     <meta name="theme-color" content="#0f1513" media="(prefers-color-scheme: dark)" />
     <title>Share — split bills</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- use-credentials: the manifest is behind Cloudflare Access; without the cookie it would get the login page. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <!-- Blocking, tiny: applies saved light/dark choice before first paint (CSP forbids inline scripts). -->
     <script src="/theme.js"></script>
     <script type="module" src="/src/main.ts"></script>

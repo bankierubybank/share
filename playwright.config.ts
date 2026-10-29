@@ -18,7 +18,9 @@ export default defineConfig({
   // Prod writes queue on one D1 primary: parallel browsers pile up saves past 30 s (ISSUES #28).
   workers: remote ? 2 : undefined,
   reporter: [["list"]],
-  use: { baseURL: BASE_URL, trace: "retain-on-failure" },
+  // serviceWorkers "block": a worker would fetch bundles itself, outside the per-origin Access route, and keep a
+  // cache between steps. test/e2e/v8.spec.ts opts back in to check the PWA bits.
+  use: { baseURL: BASE_URL, trace: "retain-on-failure", serviceWorkers: "block" },
   // Compatibility matrix: desktop engines + phone emulation. `npm run test:e2e` runs chromium only.
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

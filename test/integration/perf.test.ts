@@ -112,13 +112,14 @@ describe("GET /groups/:gid/full", () => {
     expect(full.status).toBe(200);
     expect(full.trips).toBeLessThanOrEqual(3);
 
-    const [one, summary, recurring, activity, subgroups, invite] = await Promise.all([
+    const [one, summary, recurring, activity, subgroups, invite, version] = await Promise.all([
       call("GET", `/api/groups/${gid}`), call("GET", `/api/groups/${gid}/summary`), call("GET", `/api/groups/${gid}/recurring`),
       call("GET", `/api/groups/${gid}/activity`), call("GET", `/api/groups/${gid}/subgroups`), call("GET", `/api/groups/${gid}/invite`),
+      call("GET", `/api/groups/${gid}/version`),
     ]);
     expect(full.json).toEqual({
       ...one.json, summary: summary.json, recurring: recurring.json.recurring, activity: activity.json.activity, subgroups: subgroups.json.subgroups,
-      invite: invite.json,
+      invite: invite.json, version: version.json.v,
     });
     expect(full.json.activity.find((a: { action: string }) => a.action === "bill.delete").restorable).toBe(true);
     expect(full.json.summary.total).toBe(12345);

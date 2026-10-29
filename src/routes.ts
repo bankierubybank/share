@@ -12,6 +12,7 @@ import { readLimited } from "./lib/body";
 import { registerSocial } from "./routes-social";
 import { registerInvites } from "./routes-invite";
 import { stripMemberFromSubgroups } from "./db-social";
+import { overview, tripVersion } from "./db-overview";
 
 /** `identity`: verified caller (src/lib/identity.ts), set by src/index.ts; null = unknown → 401 on trip routes. */
 export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
@@ -19,7 +20,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 
@@ -113,6 +114,13 @@ api.get("/me/groups", async (c) => {
   return c.json({ groups: await db.groupsFor(c.env.DB, identity) });
 });
 
+/** Home (v0.8): my position in each of my trips + my share of expenses per month/currency. */
+api.get("/me/overview", async (c) => {
+  const identity = c.get("identity");
+  if (!identity) return noIdentity(c);
+  return c.json(await overview(c.env.DB, identity));
+});
+
 api.post("/groups", async (c) => {
   const identity = c.get("identity");
   if (!identity) return noIdentity(c);
@@ -161,7 +169,7 @@ g.get("/", async (c) => {
   return c.json({ group, members, bills, me: c.get("me") });
 });
 
-/** The whole trip page in one request: GET / + summary + recurring + activity (first 50) + subgroups + invite status. */
+/** The whole trip page in one request: GET / + summary + recurring + activity (first 50) + subgroups + invite status + version. */
 g.get("/full", async (c) => {
   const group = c.get("group");
   if (!group.archived) await materializeDue(c.env, group.id);
@@ -173,8 +181,12 @@ g.get("/full", async (c) => {
     activity: p.activity.map((a) => ({ ...a, restorable: a.action === "bill.delete" && a.entityId !== null && p.deleted.has(a.entityId) })),
     subgroups: p.subgroups,
     invite: p.invite,
+    version: p.version,
   });
 });
+
+/** Live refresh (v0.8): an opaque token that changes when the trip does; the page polls it and reloads on change. */
+g.get("/version", async (c) => c.json({ v: await tripVersion(c.env.DB, c.get("group").id) }));
 
 /** "This is me": claim an unclaimed trip, or move my link to another (unlinked) person. */
 g.post("/me", async (c) => {

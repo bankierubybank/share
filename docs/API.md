@@ -109,9 +109,11 @@ Both join routes share the stricter link rate limit. Activity: `invite.create`, 
 |--------|------|------|-----|
 | GET | `/api/health` | – | `{ ok, version }` |
 | GET | `/api/me` | – | `{ actor: string \| null }` (Access email, `"service token"`, or null) |
+| GET | `/api/me/overview` | – | (0.8) `{ trips: [{ groupId, paid, owed, net, total, bills }], months: [{ month: "YYYY-MM", currency, owed }] }` — my position in every trip I'm linked to (same numbers as that trip's `summary` balance for me; `total`/`bills` = trip's expense total / live bills) and my share of expenses per month and currency (newest first, ≤36 rows; payments excluded; currencies never added together) |
+| GET | `/api/groups/:gid/version` | – | (0.8) `{ v: string }` opaque token that changes when the trip does (activity or bill edits); the trip page polls it for live refresh. `/full` returns the same token as `version`. |
 | POST | `/api/groups` | `{ name, currency, members: string[], me?: index }` | `201 { group, members, me }` (creator linked to `members[me]`) |
 | GET | `/api/groups/:gid` | – | `{ group, members, bills, me }` (`me` = my member id; live bills, newest first; materializes due recurring bills) |
-| GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups, invite /* 0.6: { active, expiresAt } */ }` — same values as the separate endpoints |
+| GET | `/api/groups/:gid/full` | – | (0.5) the trip page in one request: `{ group, members, bills, me, summary, recurring, activity /* first 50 */, subgroups, invite /* 0.6: { active, expiresAt } */, version /* 0.8 */ }` — same values as the separate endpoints |
 | PATCH | `/api/groups/:gid` | `{ name?, currency?, archived?: boolean }` | `{ group }` |
 | DELETE | `/api/groups/:gid` | – | `204` hard delete incl. receipts |
 | POST | `/api/groups/:gid/members` | `{ name, promptpay?, email? }` | `201 { member }` |

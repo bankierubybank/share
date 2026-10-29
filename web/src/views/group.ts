@@ -45,13 +45,19 @@ interface State {
   subgroups: Subgroup[];
   /** Invite link status (absent in view mode). */
   invite?: InviteStatus;
+  /** Opaque change token (live refresh; absent in view mode). */
+  version?: string;
   /** My member id (linked identity); null in view mode. */
   me: string | null;
 }
 
 /** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
+/** Bumped by every renderGroup: re-rendering the same URL (language switch, claim) must not stack pollers. */
+let pageGen = 0;
+
 export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" | "view" = "edit") {
   const isView = mode === "view";
+  const gen = ++pageGen;
   // A load that finishes after the user navigated away must not paint over the new page.
   const ownPath = location.pathname;
   const stillHere = () => location.pathname === ownPath;
@@ -148,7 +154,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     api.me().then(({ actor }) => { if (actor) who.textContent = t("group.signedInAs", { email: actor }); }, () => undefined);
   }
 
+  let lastOwnRefresh = 0;
   async function refresh() {
+    lastOwnRefresh = Date.now();
     if ((await load()) && stillHere()) render();
   }
 
@@ -1035,7 +1043,38 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           h("td", null, b.payers.map((p) => memberName(p.memberId)).join(" & ")), h("td", null, money(b.amount)))))));
   }
 
-  if ((await load()) && stillHere()) render();
+  // ---------- live refresh (#12): other people's changes show up without reloading ----------
+  // Polls a tiny version token while the page is visible and reloads when it moved. Skips a beat while a dialog is
+  // open or a save is in flight (a refresh then would fight the user); our own saves refresh themselves.
+  function startLiveRefresh() {
+    if (isView) return;
+    const every = Number(local.get("share.pollMs")) || 15_000; // E2E shortens it
+    let timer = 0;
+    const tick = async () => {
+      clearTimeout(timer);
+      if (!stillHere() || gen !== pageGen) return;
+      timer = window.setTimeout(tick, every);
+      if (document.hidden || pending.size || document.querySelector("md-dialog[open]")) return;
+      try {
+        const { v } = await api.version(gid);
+        if (!stillHere() || v === state.version) return;
+        const fromOthers = Date.now() - lastOwnRefresh > 10_000;
+        await refresh();
+        if (fromOthers && stillHere()) snackbar(t("live.updated"));
+      } catch { /* offline or signed out: try again next tick */ }
+    };
+    timer = window.setTimeout(tick, every);
+    const onVisible = () => {
+      if (!stillHere() || gen !== pageGen) return document.removeEventListener("visibilitychange", onVisible);
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+  }
+
+  if ((await load()) && stillHere()) {
+    render();
+    startLiveRefresh();
+  }
 }
 
 function initial(name: string) {

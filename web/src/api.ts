@@ -32,6 +32,8 @@ export interface ViewSnapshot {
   summary: Summary;
   readOnly: true;
 }
+export interface TripPosition { groupId: string; paid: number; owed: number; net: number; total: number; bills: number }
+export interface Overview { trips: TripPosition[]; months: { month: string; currency: string; owed: number }[] }
 export interface InviteStatus { active: boolean; expiresAt: string | null }
 /** GET /join/:token — names only; `groupId` only once the caller is in the trip. */
 export type JoinInfo =
@@ -92,6 +94,10 @@ export const receiptUrl = (gid: string, bid: string, v = "") => `/api${b(gid, bi
 export const api = {
   me: () => req<{ actor: string | null }>("GET", "/me"),
   myGroups: () => req<{ groups: MyGroup[] }>("GET", "/me/groups"),
+  /** My position in each trip + my share of expenses by month/currency (home). */
+  overview: () => req<Overview>("GET", "/me/overview"),
+  /** Opaque token that changes when the trip changes (live refresh). */
+  version: (gid: string) => req<{ v: string }>("GET", `${g(gid)}/version`),
   /** `me` = index of the creator in `members`. */
   createGroup: (name: string, currency: string, members: string[], me = 0) =>
     req<{ group: Group; members: Member[]; me: string }>("POST", "/groups", { name, currency, members, me }),
@@ -100,7 +106,7 @@ export const api = {
   groupPage: (gid: string) =>
     req<{
       group: Group; members: Member[]; bills: Bill[]; me: string | null; summary: Summary; recurring: Recurrence[];
-      activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus;
+      activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus; version: string;
     }>("GET", `${g(gid)}/full`),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),

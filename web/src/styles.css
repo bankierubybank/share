@@ -505,4 +505,15 @@ md-list-item[data-testid="bill-item"] .bill-end .md-typescale-title-small { font
 @media (max-width: 599px) {
   .hero h1 { font-size: 30px; line-height: 38px; }
 }
-.currency-select { min-width: 112px; }
+.currency-select { min-width: 136px; } /* fits the floated "Currency" label (TH: สกุลเงิน) */
+
+/* ---------- v0.8 ---------- */
+/* Home: my position per trip (#3) and my spending by month (#4). */
+.trip-net { white-space: nowrap; color: var(--md-sys-color-on-surface-variant); }
+.trip-net.pos { color: var(--positive); }
+.trip-net.neg { color: var(--negative); }
+.spending { display: flex; flex-direction: column; gap: 4px; }
+.spend-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.spend-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.spend-list li + li { border-top: 1px solid var(--md-sys-color-outline-variant); }
+.spend-list li:first-child .md-typescale-title-small { color: var(--md-sys-color-primary); }

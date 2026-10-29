@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.7.0 (UI/UX revamp) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version ada39834)
+## Status: v0.8.0 (home overview, live refresh, installable) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 7bfa9347)
 
-Local 2026-10-29 (0.7.0): unit 162, integration 186, system 32, security 118 (+2 prod-only), E2E 59×4 (236), rate limit 1 — green.
-Prod 2026-10-29 (ada39834): system 32, security 112 (+8 local-only), E2E 112 (+6 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left (9 from the failed first 0.7 run deleted with owner OK, ISSUES #40).
+Local 2026-10-29 (0.8.0): unit 168, integration 189, system 32, security 118 (+2 prod-only), E2E 64×4 (256), rate limit 1 — green.
+Prod 2026-10-29 (7bfa9347): system 32, security 112 (+8 local-only), E2E 118 (+10 local-only; Chromium + iPhone), rate limit 1 — green; no test trips left. PWA files served (manifest, icons, `sw.js` no-cache).
 
 | Area | State |
 |------|-------|
@@ -100,10 +100,20 @@ Prod 2026-10-29 (ada39834): system 32, security 112 (+8 local-only), E2E 112 (+6
 | Narrow currency symbols (฿, $, €); fx amounts keep the code | ✅ |
 | Home: your trips first; "trip" wording EN + TH; "Not joined yet"; no premature red error in Add bill | ✅ |
 
+## v0.8 status (backlog picks)
+
+| # | Item | State |
+|---|------|-------|
+| 3 | Your balance per trip on home | ✅ `GET /api/me/overview` (SQL, one batch, matches each trip's summary) |
+| 4 | My spending across trips | ✅ home card: my share per month, per currency |
+| 11 | PWA (installable) | ✅ manifest + PNG/maskable icons, assets-only service worker, Install button; offline writes not done |
+| 12 | Live refresh | ✅ polls `…/version` every 15 s while visible |
+| 22 | Mark as paid | ✅ payment dialog button + QR hint |
+| 24 | THB default for Thai users | ✅ last-used currency, else Thai language / Bangkok clock → THB |
+
 ## Next ideas (backlog)
-- Round 3, not picked: #2 email autocomplete, #3 per-person balance on home,
-  #4 "my spending" across trips, #5 live FX, #6 receipt scan (Workers AI), #7 budgets, #8 bill templates,
-  #9 reminders, #10 import Splitwise/KittySplit, #11 PWA/offline, #12 live refresh, #14 leave trip,
-  #17 staging env, #19 error tracking/uptime, #20 restore drill.
+- Not picked yet: #2 email autocomplete, #5 live FX, #6 receipt scan (Workers AI), #7 budgets, #8 bill templates,
+  #9 reminders, #10 import Splitwise/KittySplit, #11b offline bill entry, #14 leave trip, #17 staging env,
+  #19 error tracking/uptime, #20 restore drill, #23 hide search/filters on short trips.
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).

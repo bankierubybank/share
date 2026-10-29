@@ -19,6 +19,7 @@ import "./styles.css";
 import { dispatch, notFound, route } from "./router";
 import { lang } from "./i18n";
 import { renderHome } from "./views/home";
+import { initPwa } from "./pwa";
 
 // The group view (and everything it pulls in) is its own chunk (#18): the home page loads less.
 const group = () => import("./views/group");
@@ -27,6 +28,7 @@ const join = () => import("./views/join");
 if (typescaleStyles.styleSheet) document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
 
 lang(); // resolves the saved/browser language and sets <html lang> before the first render
+initPwa();
 const root = document.getElementById("app")!;
 
 route("/", () => renderHome(root));

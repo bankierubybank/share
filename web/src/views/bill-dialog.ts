@@ -421,7 +421,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     clear(qrBox,
       h("div", { class: "md-typescale-title-small" }, icon("qr_code_2"), " ", t("bill.qrTitle", { name: to!.name })),
       canvas,
-      h("div", { class: "md-typescale-body-small muted" }, t("bill.qrHelp")));
+      h("div", { class: "md-typescale-body-small muted" }, t("bill.qrHelp")),
+      !bill && h("div", { class: "md-typescale-body-medium", dataset: { testid: "qr-then-mark" } }, t("bill.qrThenMark")));
     const payload = promptPayPayload(to!.promptpay!, amt!);
     qrBox.dataset.payload = payload;
     void renderQr(canvas, payload).catch(() => { qrBox.hidden = true; });
@@ -463,7 +464,9 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   });
 
   // ---------- save / delete ----------
-  const saveBtn = h("md-filled-button", { onclick: () => save(), dataset: { testid: "bill-save" } }, t("common.save")) as HTMLElement & { disabled: boolean };
+  // Recording a payment (Settle) is "Mark as paid" (#22): after paying by QR / bank, one tap records it.
+  const saveBtn = h("md-filled-button", { onclick: () => save(), dataset: { testid: "bill-save" } },
+    kind === "payment" && !bill ? t("bill.markPaid") : t("common.save")) as HTMLElement & { disabled: boolean };
 
   async function save() {
     formError.textContent = "";

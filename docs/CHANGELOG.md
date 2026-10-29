@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.0 — 2026-10-29
+
+Owner picks from the backlog: #3, #4, #11 (PWA), #12, #22, #24 ("#1" was already done in 0.6 — skipped).
+
+### Home: where I stand everywhere (#3) + my spending (#4)
+- Each trip on home shows **You get ฿2,900.00 / You owe ¥1,800 / Settled**, in that trip's currency.
+- **My spending** card: my share of expenses per month (this month first, ≤6 months), one line per month with each
+  currency side by side (never added across currencies). Payments between friends don't count as spending.
+- New `GET /api/me/overview` — SQL aggregation in one batch; matches each trip's own summary to the cent.
+- On a new device (nothing cached) the trips move above the new-trip form once the server answers — unless you've
+  started typing in the form.
+
+### Live refresh (#12)
+- An open trip polls a tiny `GET …/version` token every 15 s (and when you come back to the tab) and reloads when
+  someone else changed something: "Updated with changes from others". Waits while a dialog is open or a save is
+  pending. `/full` returns the token too, so your own saves never trigger a reload.
+
+### Mark as paid (#22)
+- Settle opens a payment whose main button reads **Mark as paid**; with a PromptPay QR it says to scan, pay, then
+  tap it.
+
+### Currency default (#24)
+- A new trip defaults to the currency of your last trip; else **THB** if the app or browser language is Thai or the
+  clock is Asia/Bangkok (an English browser on a Thai phone got USD before); else the browser region's currency.
+
+### Installable app (#11)
+- Manifest with PNG + maskable icons, Apple touch icon, a minimal service worker (bundles cache-first only), and an
+  **Install app** button on home where the browser offers it. iOS: Share → Add to Home Screen.
+
 ## 0.7.0 — 2026-10-28
 
 UI/UX review + revamp (owner: "review ui/ux — feel free to revamp").
