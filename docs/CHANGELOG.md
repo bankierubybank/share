@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.1 — 2026-10-30
+
+Receipt scan tuned (owner: "Tune the prompt"). Measured with a new prompt lab (`scripts/scan-lab/`: 5 varied sample
+receipts scored against known answers, run against the real model locally): **9/25 → 25/25**, stable over reruns.
+
+- Root cause: with JSON-schema decoding the model only filled the *required* fields (merchant, total). Every field is
+  now required ("" / [] = not on the receipt), so date, category and items come back.
+- Dates are copied as printed and converted server-side (`parseReceiptDate`): D/M/Y, Buddhist-era years (27/10/2569),
+  2-digit years (29/10/26 or BE 69), 2026年10月26日, US M/D on USD receipts; never in the future.
+- Currency is always read (the yen receipt used to come back as ฿1,980.00 in a THB trip; now fx ¥1,980).
+- Service charge / tip and tax *added on top* are read too: the itemized split gets them as percentages (10% service
+  + 7% VAT on a Thai restaurant bill). Items are only offered when items + service + tax rebuild the printed total
+  (within 2 minor units) — a missed line can't produce a wrong amount; the total is still filled in.
+- Slower: ~3–5 s per receipt (was ~2 s), from the longer answer.
+
 ## 0.11.0 — 2026-10-30
 
 Owner picks: #2, #6, #7, #8, #9, #11, #12, #13.

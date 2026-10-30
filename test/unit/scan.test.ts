@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeScan, toMinor } from "../../src/lib/scan";
+import { normalizeScan, parseReceiptDate, toMinor } from "../../src/lib/scan";
 
 // v0.11 receipt scan: the model's answer is untrusted text — only clean suggestions may come out.
 
@@ -38,8 +38,41 @@ describe("normalizeScan", () => {
     for (const raw of ["not json", "[1,2]", null, 42, []]) expect(normalizeScan(raw, "USD", today)).toEqual({});
   });
   it("bounds lengths (description ≤ 120) and item count", () => {
-    const r = normalizeScan({ merchant: "M".repeat(500), total: "1", items: Array.from({ length: 300 }, (_, i) => ({ name: `i${i}`, price: "1" })) }, "USD", today);
+    const r = normalizeScan({ merchant: "M".repeat(500), total: "100", items: Array.from({ length: 300 }, (_, i) => ({ name: `i${i}`, price: "1" })) }, "USD", today);
     expect(r.description).toHaveLength(120);
     expect(r.items!.length).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("parseReceiptDate", () => {
+  const today = "2026-10-30";
+  it("reads the formats receipts use", () => {
+    const cases: [string, string | null, boolean?][] = [
+      ["2026-10-28", "2026-10-28"], ["28/10/2026", "2026-10-28"], ["28-10-2026 19:42", "2026-10-28"], ["28.10.2026", "2026-10-28"],
+      ["27/10/2569", "2026-10-27"], // Buddhist era
+      ["29/10/26", "2026-10-29"], ["29/10/69", "2026-10-29"], // 2-digit, Gregorian or Buddhist era
+      ["2026年10月26日 21:10", "2026-10-26"], ["2026/10/26", "2026-10-26"],
+      ["10/25/2026", "2026-10-25"], // can't be D/M (no month 25)
+      ["09/10/2026", "2026-09-10", true], ["09/10/2026", "2026-10-09"], // US receipts M/D, else D/M
+      ["", null], ["31/02/2026", null], ["01/01/1999", null], ["05/11/2026", null] /* future */, ["soon", null],
+    ];
+    for (const [raw, want, usd] of cases) expect(parseReceiptDate(raw, today, usd), raw).toBe(want);
+  });
+});
+
+describe("items must rebuild the printed total", () => {
+  const today = "2026-10-30";
+  it("service + VAT on top (Thai receipt) → basis points for the itemized split", () => {
+    const r = normalizeScan({ total: "576.73", currency: "THB", service: "49.00", tax_added: "37.73",
+      items: [{ name: "Tom yum", price: "250.00" }, { name: "Pad thai", price: "120.00" }, { name: "Coconut x2", price: "120.00" }] }, "THB", today);
+    expect(r).toMatchObject({ amount: 57673, serviceBp: 1000, taxBp: 700 });
+    expect(r.items).toHaveLength(3);
+  });
+  it("a missed or misread line → no items (the amount is still the total)", () => {
+    const r = normalizeScan({ total: "360.00", currency: "THB", items: [{ name: "Som tam", price: "80" }, { name: "Gai yang", price: "150" }] }, "THB", today);
+    expect(r).toEqual({ amount: 36000 });
+  });
+  it("a single line isn't worth an itemized split", () => {
+    expect(normalizeScan({ total: "80", currency: "THB", items: [{ name: "Som tam", price: "80" }] }, "THB", today).items).toBeUndefined();
   });
 });

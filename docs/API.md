@@ -121,7 +121,7 @@ Both join routes share the stricter link rate limit. Activity: `invite.create`, 
 | POST | `/api/groups/:gid/categories` | `{ name: 1–24, icon }` | (0.11) `201 { category }`; icon from a fixed list; name unique per trip (409); ≤ 20 per trip (409 `limit`). A bill uses one as `category: "c:<id>"` |
 | PATCH | `/api/groups/:gid/categories/:cid` | `{ name, icon }` | (0.11) `{ category }` |
 | DELETE | `/api/groups/:gid/categories/:cid` | – | (0.11) `204`; bills keep `c:<id>` (shown as Other) |
-| POST | `/api/groups/:gid/scan` | raw JPEG/PNG/WebP ≤ 2 MB | (0.11) `{ scan: { description?, amount?, date?, category?, fx?: { currency, amount }, items?: [{ description, amount }] } }` — suggestions only; 429 after 10/min; 502 `scan_failed` |
+| POST | `/api/groups/:gid/scan` | raw JPEG/PNG/WebP ≤ 2 MB | (0.11) `{ scan: { description?, amount?, date?, category?, fx?: { currency, amount }, items?: [{ description, amount }], serviceBp?, taxBp? } }` (0.11.1: items only when they rebuild the total) — suggestions only; 429 after 10/min; 502 `scan_failed` |
 | GET | `/api/me/contacts` | – | (0.11) `{ contacts: [{ email, name }] }` people linked in my live trips (not me, not service tokens) |
 | GET | `/api/push/key` | – | (0.11) `{ publicKey }` VAPID public key; 404 `push_off` when not configured |
 | POST | `/api/me/push` | `{ endpoint, keys: { p256dh, auth }, lang? }` | (0.11) `201`; endpoint must be a browser push service (FCM, Mozilla, Apple, WNS) |

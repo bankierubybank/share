@@ -22,6 +22,9 @@ export interface ReceiptScan {
   /** The receipt is in another currency: its total, for the fx fields. */
   fx?: { currency: string; amount: number };
   items?: { description: string; amount: number }[];
+  /** With items: service charge / tip and added tax, basis points (tax on top of service). */
+  serviceBp?: number;
+  taxBp?: number;
 }
 /** Someone from my other trips (v0.11): email suggestions when adding people. */
 export interface Contact { email: string; name: string }

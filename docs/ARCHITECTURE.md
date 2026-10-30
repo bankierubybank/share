@@ -142,6 +142,10 @@ batches far more (ISSUES #28). Rules:
   answer is untrusted → `normalizeScan` keeps only clean values (amounts → minor units of the right currency, dates
   not in the future, known categories, bounded text). `SCAN_LIMIT` rate limit (10/min/identity). Local dev / tests:
   `SCAN_FAKE=1` → canned answer. The binding forces a remote session in `wrangler dev`, so dev/tests run `--local`.
+  All schema fields are required (constrained decoding skips optional ones); dates as printed → `parseReceiptDate`;
+  items only when they (with service/tax as itemized basis points) rebuild the total. Tune with `scripts/scan-lab/`
+  (`npx wrangler dev -c scripts/scan-lab/wrangler.jsonc --port 8798`, then `node scripts/scan-lab/run.mjs`; real model,
+  small Workers AI cost, never deployed).
 - **Web Push** (`src/lib/webpush.ts`, `src/routes-v11.ts`): `push_subscriptions` (endpoint, identity, keys, lang;
   ≤ 10 per identity). After a bill create (`waitUntil`), everyone else linked to the trip gets an aes128gcm-encrypted
   message signed with VAPID (`VAPID_PUBLIC_KEY` var, `VAPID_PRIVATE_KEY` secret); 404/410 from the push service

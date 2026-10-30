@@ -514,6 +514,9 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
       filled++;
     } else if (s.items && s.items.length > 1) {
       items.splice(0, items.length, ...s.items.map((it) => ({ description: it.description, amount: toInput(it.amount, currency), members: new Set(members.map((m) => m.id)) })));
+      // Service charge / tip and added tax from the receipt (the server checked they rebuild its total).
+      serviceStr = s.serviceBp ? bpToInput(s.serviceBp) : "";
+      taxStr = s.taxBp ? bpToInput(s.taxBp) : "";
       modeChips[MODES.indexOf("itemized")].click();
       filled++;
     } else if (s.amount) {

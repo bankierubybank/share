@@ -1,0 +1,13 @@
+{
+  // Receipt-scan prompt lab (dev only, never deployed): `npx wrangler dev -c scripts/scan-lab/wrangler.jsonc --port 8798`
+  // runs locally with the real Workers AI model (remote binding — needs `wrangler login` or CLOUDFLARE_API_TOKEN, and
+  // spends a little of the account's Workers AI allowance). See scripts/scan-lab/run.mjs.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "share-scan-lab",
+  "account_id": "d20bca6d49889066d98d858a37f6837e",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "ai": { "binding": "AI" }
+}

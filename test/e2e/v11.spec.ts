@@ -40,10 +40,12 @@ test("scan a receipt: fills description, date, items and attaches the photo", as
   await expect(page.getByTestId("bill-description").locator("input")).toHaveValue("Som Tam Nua");
   await expect(page.getByTestId("bill-date").locator("input")).toHaveValue("2026-10-28");
   await expect(page.getByTestId("mode-itemized")).toHaveAttribute("selected", "");
+  await expect(page.getByTestId("item-service").locator("input")).toHaveValue("10");
+  await expect(page.getByTestId("item-tax").locator("input")).toHaveValue("7");
   await expect(page.getByTestId("receipt-img")).toBeAttached(); // in the collapsed "More" section
   await saveBill(page);
   const row = page.getByTestId("bill-item").filter({ hasText: "Som Tam Nua" });
-  await expect(row).toContainText("245.00");
+  await expect(row).toContainText("288.37"); // items + 10% service + 7% VAT = the receipt's total
   await expect(row).toContainText(/receipt/i);
 });
 

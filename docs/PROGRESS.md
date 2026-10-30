@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-29_
 
-## Status: v0.11.0 (receipt scan, notifications, trip dates, categories, offline edits) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 226434fc)
+## Status: v0.11.1 (receipt scan tuned) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 22c45486)
 
-Local 2026-10-30 (0.11.0): unit 203, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
-Prod 2026-10-30 (226434fc): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green. Migration 0008 applied (backup `.tmp/prod-before-0008.sql`, local only). One real receipt scan on prod: 200 in ~2 s, read merchant + total (not date/items — prompt to tune).
+Local 2026-10-30 (0.11.1): unit 207, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
+Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green (a first run had 2 network timeouts from the dev Mac, ETIMEDOUT; rerun clean). Real scan on prod: merchant, total, date, category and all 4 items. Prompt lab (scripts/scan-lab): 25/25 on 5 sample receipts.
 
 | Area | State |
 |------|-------|

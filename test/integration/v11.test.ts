@@ -89,12 +89,13 @@ describe("receipt scan", () => {
     const r = await call("s11@x.io", "POST", `/api/groups/${t.gid}/scan`, undefined, { body: JPEG, type: "image/jpeg" });
     expect(r.status).toBe(200);
     expect(r.json.scan).toEqual({
-      description: "Som Tam Nua", amount: 24500, date: "2026-10-28", category: "food",
+      description: "Som Tam Nua", amount: 28837, date: "2026-10-28", category: "food", // printed 28/10/2569 (Buddhist era)
       items: [{ description: "Som tam", amount: 12000 }, { description: "Grilled chicken", amount: 12500 }],
+      serviceBp: 1000, taxBp: 700, // 24.50 service + 18.87 VAT on 245.00 → 288.37, the printed total
     });
     const usd = await trip("s11@x.io", "USD");
     const r2 = await call("s11@x.io", "POST", `/api/groups/${usd.gid}/scan`, undefined, { body: JPEG, type: "image/jpeg" });
-    expect(r2.json.scan.fx).toEqual({ currency: "THB", amount: 24500 });
+    expect(r2.json.scan.fx).toEqual({ currency: "THB", amount: 28837 });
     expect(r2.json.scan.amount).toBeUndefined();
     expect(r2.json.scan.items).toBeUndefined();
   });
