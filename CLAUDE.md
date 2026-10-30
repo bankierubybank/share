@@ -52,31 +52,3 @@ Steps 2→3→4 = `npm run ship`. Never deploy if local fails; never commit if p
 
 See `docs/PLAN.md`. Sonnet: work with a written contract (API.md, failing test). Opus: money math, auth,
 architecture, UX. Haiku: changelog/doc formatting.
-
-## macOS stability guard: screenshot / browser usage
-
-This Mac (M1 MacBook Air, 8-core) crashed WindowServer on 2026-10-29 23:48 with
-"IOSurface creation failed … system IOSurface limit reached". The crash logged the user out and
-killed all running sessions. At the time, 3 Claude Code sessions were running and had made
-~1,600 `computer` / `Claude_Browser` screenshot and browser actions between them.
-
-Rules for this session:
-
-1. **Text first, screenshots last.** To check page content, use `get_page_text`, `read_page`,
-   `find`, or `javascript_tool` (DOM queries). Take a screenshot only when visual layout
-   itself is what you need to verify, e.g. CSS alignment or overflow.
-2. **No screenshot loops.** Never poll with repeated screenshots to wait for something.
-   Wait on a DOM condition or use `computer_wait`. Max ~1 screenshot per verification step.
-3. **Batch, don't spam.** Combine actions in one `browser_batch` and take a single
-   screenshot at the end if needed, not after every click.
-4. **Clean up.** Close tabs you opened when a task is done. Don't leave extra browser
-   windows or tabs open.
-5. **Playwright (if used):** run headless, prefer Chromium over WebKit, and always close the
-   browser/context at the end of each test run (`await browser.close()`).
-6. **Health check every ~30–45 minutes of browser work**, or before a long unattended stretch.
-   Run:
-   for p in $(pgrep -i "claude|chrome|webkit"); do n=$(basename "$(ps -o comm= -p $p)"); s=$(vmmap -summary $p 2>/dev/null | grep -E "^IOSurface " | awk '{print "res="$3, "regions="$NF}'); [ -n "$s" ] && echo "$p $n $s"; done
-   If any single process shows IOSurface resident > 1 GB, or keeps rising across checks,
-   STOP browser/screenshot work. Report the numbers to the user and wait for instructions.
-7. **When unattended,** finish the current step and stop rather than starting new
-   screenshot-heavy work.
