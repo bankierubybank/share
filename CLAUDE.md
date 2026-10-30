@@ -29,15 +29,21 @@ Steps 2→3→4 = `npm run ship`. Never deploy if local fails; never commit if p
 - Frontend: build DOM with `h()` (`web/src/dom.ts`); never `innerHTML` with user data.
 - New UI elements get `data-testid` for E2E.
 - Test env var for target URL is `TARGET_URL` (Vitest reserves `BASE_URL`).
-- Org policy hooks block `rm -rf`, some SQL-looking strings and scheduling words in shell commands — put such
-  edits in files via Write/Edit (or a script file) instead.
+- Org policy hooks block `rm -rf`, some SQL-looking strings and scheduling words (even the bare word "at", e.g. in
+  a heredoc) in shell commands — put such edits in files via Write/Edit (or a script file) instead. Don't work around
+  a block; relay only what its message says.
 - Migrations that rebuild tables: run `bash scripts/verify-migration.sh`, and `wrangler d1 export … --remote`
   before applying remotely (see docs/ARCHITECTURE.md → Data model).
 - Material buttons inside a `<form>` default to `type=submit` — always pass `type: "button"`.
 - All UI text goes through `t()` (`web/src/i18n.ts`); add the key to `en` AND `th` (compile error otherwise).
+  Keys ending `.one` / `.other` are plural pairs for `tn()` (never use them for anything else); both languages need
+  the same `{params}`.
 - Heavy UI (dialogs, stats, export, move) is lazy: `const loadX = () => import("./x")`. Group-only Material
   components are imported in `views/group.ts`, not `main.ts` (home stays small; E2E checks this).
 - Request bodies: never `arrayBuffer()` an unbounded body — use `readLimited()` (`src/lib/body.ts`).
+- Local dev / tests run `wrangler dev --local` (the Workers AI binding would otherwise open a remote session) with
+  `SCAN_FAKE=1`. Secrets (`VAPID_PRIVATE_KEY`) only via `wrangler secret put`, never in the repo; push endpoints are
+  capability URLs — never log them.
 - Never write another group's id where this group's users can read it (activity, responses): ids are secrets.
 - Every POST/PUT/PATCH must be `application/json` (CSRF guard) — bodyless actions send `{}`.
 - E2E: wait for dialogs' `data-ready="1"` and for the re-render after a save; the fixture deletes created groups.

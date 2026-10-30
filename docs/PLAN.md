@@ -1,7 +1,8 @@
 # Plan & Task Dispatch
 
-Goal: bill-splitting web app (Splitwise / KittySplit style) on Cloudflare Workers. KittySplit model — no in-app
-accounts; Cloudflare Access gates the site; possession of a group link (`/g/<id>`) = edit access to that group.
+Goal: bill-splitting web app (Splitwise / KittySplit style) on Cloudflare Workers. No in-app accounts: Cloudflare
+Access gates the site and says who you are; since v0.4 a trip opens only for the people linked to it (their Access
+email on one of its members — added by someone in the trip, or by opening an invite link).
 
 ## Model tiers (how work is split)
 
@@ -26,6 +27,8 @@ Rules that worked:
 | v0.3 (2026-10-26) | migration 0003, social routes, UI for 9 items, E2E | v3 API suites; Thai/English i18n (348 keys) | **merge leaked source group id via activity**; emoji comment length |
 | review (2026-10-27) | full code review + doc cross-check | — | (Opus) unbounded chunked bodies, runaway recurrences, scheduled steps coupled, stale group render over home, blob URL leak |
 | v0.4 (2026-10-27) | membership (auth = Opus tier, kept inline): identity, migration 0004, gating, claim, UI, all test suites | — (auth change, not dispatched) | (prod E2E) home re-render wiped a half-typed form when "my trips" arrived |
+| v0.5–v0.10 (2026-10-27…29) | perf, invites, rate limits, UI review, overview, PWA, budgets, offline, review fixes | not logged per round | see CHANGELOG / ISSUES #32–#51 (most found by the E2E and prod runs) |
+| v0.11 (2026-10-29) | scan, push routes, categories, trip dates, offline edits, UI, all suites | `src/lib/webpush.ts` (RFC 8291/8292, WebCrypto) against a written interface + unit tests | — |
 
 ## Product scope
 
@@ -33,4 +36,4 @@ See `README.md` → Features and `docs/PROGRESS.md` for what's done and the back
 
 ## Default workflow
 
-See `CLAUDE.md` → "Workflow": test local → deploy → test prod → update docs → commit (→ push once a remote exists).
+See `CLAUDE.md` → "Workflow": test local → deploy → test prod → update docs → commit → push.

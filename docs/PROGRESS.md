@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-10-29_
+_Last updated: 2026-10-30_
 
 ## Status: v0.11.1 (receipt scan tuned) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 22c45486)
 
@@ -16,10 +16,10 @@ Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+1
 | Trip membership: only linked people (member email = Access login) see a trip; my-trips list; claim pre-0.4 trips | ✅ v0.4.0 |
 | Material 3 SPA: home, group (bills/summary/people), bill dialog, settle-up | ✅ |
 | Responsive: phone tabs + full-screen dialog; laptop 2-column | ✅ |
-| Tests: unit 153, integration 168, system 32, security 110 (+2 prod-only), E2E 48×4 browsers (192) | ✅ local 2026-10-27 (v0.4.0) |
+| Tests (current counts: status lines above) | ✅ every release: local gate, then prod; `ci` on GitHub |
 | Firefox compat | ✅ GitHub CI (Linux): 55/55 E2E green 2026-10-28 · ⚠️ still won't launch on this Mac (ISSUES #1) |
-| Deploy to prod (D1 `share-db` fc72d57c…, APAC; version 5bffded5) | ✅ 2026-10-23 |
-| Prod tests via Access service token: system 32, security 108 (+4 local-only), E2E 92 (Chromium + iPhone) | ✅ 2026-10-27 (v0.4.0, version f8bfa8f1) |
+| Deploy to prod (D1 `share-db` fc72d57c…, APAC) | ✅ first 2026-10-23; current version in the status line |
+| Prod tests via Access service token (system, security, E2E on Chromium + iPhone, rate limit) | ✅ every release |
 | R2 buckets `share-receipts`, `share-backups`; daily scheduled job 00:17 UTC | ✅ |
 | Demo trip "Phuket trip" on prod (link kept out of the repo: ids are secrets) | ✅ |
 | Access gate: unauthenticated → 302 to bankierubybank.cloudflareaccess.com | ✅ |
@@ -34,8 +34,9 @@ Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+1
 - **Rotate Access service token `share-tests`** (ISSUES #9). Old token was sent to Google Fonts hosts
   by the E2E setup (fixed in 0.1.1). Low risk; deferred by owner. After rotating: update `.env.test`,
   run `npm run test:prod` to confirm, then mark #9 closed.
-- Add the 3 Actions secrets + Settings from `docs/CI.md` (steps 3–6) — until then `deploy` fails at its first
-  Cloudflare step after each green `ci` (no harm, nothing deployed).
+- Add the 3 Actions secrets + Settings from `docs/CI.md` (steps 3–5) — checked 2026-10-30: the repo has none yet, so
+  `deploy` fails at its first Cloudflare step after each green `ci` (no harm, nothing deployed).
+- Checked 2026-10-30: the Worker has no secrets yet (`VAPID_PRIVATE_KEY` above still to do).
 ## v0.2 feature status (backlog picks)
 
 | # | Item | State |
@@ -118,7 +119,7 @@ Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+1
 |---|------|-------|
 | 4 | Trip budgets | ✅ `groups.budget`; bar in the trip header (amber ≥ 80 %, red over) |
 | 6 | Settle-up reminders | ✅ share-sheet / copy message per debtor + "Share with everyone"; no email sending |
-| 8 | Offline bill entry | ✅ new bills queue on the device, sync with `clientRef` (retry-safe); trip opens offline from the last copy; edits/deletes still need a connection |
+| 8 | Offline bill entry | ✅ new bills queue on the device, sync with `clientRef` (retry-safe); trip opens offline from the last copy; edits/deletes too since 0.11 |
 | 10 | Summary image | ✅ canvas PNG: preview, download, share |
 | 12 | Undo instead of confirm | ✅ bill delete (no confirm), comments (inline undo), subgroups |
 | 17 | Firefox bundle cache (ISSUES #43) | ✅ worker precaches on install; green on CI Firefox |
@@ -147,8 +148,8 @@ Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+1
 | 13 | Accessibility pass | ✅ 10 more axe checks × 4 browsers; Download link fixed |
 
 ## Next ideas (backlog)
-- Not picked yet: email autocomplete, live FX rates, receipt scan (Workers AI), bill templates, import
-  Splitwise/KittySplit CSV, leave trip, hide search/filters on short trips, staging env, error tracking/uptime,
-  restore drill, Durable Object per trip. Offline edits/deletes (only new bills queue today).
+- Not picked yet: live FX rates, bill templates, import Splitwise/KittySplit CSV, leave trip, hide search/filters
+  on short trips, staging env, error tracking/uptime, restore drill, Durable Object per trip.
+- Open tech debt: ISSUES #52 (0.10 review leftovers), #57 (push Topic header).
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).

@@ -9,23 +9,31 @@ Live: https://share.bankierubybank.workers.dev (behind Cloudflare Access).
 
 - **Trips are private**: only people in a trip (their Cloudflare Access email added under People) can open it;
   home lists "My trips" from the server. Pre-0.4 trips: the first visitor picks who they are.
-- **Groups**: create, share the link, archive (read-only) or delete; merge two groups; read-only view links (`/v/<id>`).
+- **Trips**: create, invite people with a join link (`/join/<token>`, 14 days), archive (read-only), delete to a
+  30-day bin (any member restores); merge two trips; read-only view links (`/v/<id>`); budget, first / last day,
+  the trip's own categories.
+- **Home**: my trips with my balance in each, my spending per month, the bin.
 - **Bills**: split equally, by exact amounts, by shares, by percent, or itemized (service charge + VAT);
-  several payers; foreign currency with a rate; categories; receipt photos; comments; repeating weekly / monthly;
-  move a bill to another group; duplicate.
+  several payers; foreign currency with a rate; categories; receipt photos; **receipt scan** (Workers AI fills the
+  bill in); comments; repeating weekly / monthly; move a bill to another trip; duplicate.
 - **Summary**: balances, the fewest "who pays whom" payments, Settle (full / partial, PromptPay QR for THB),
-  settle-up history, spending by category, trip stats.
-- **History**: activity log (who / what / when) with restore; Undo after delete (soft delete, 30-day purge).
+  settle-up history, reminders (share sheet), spending by category and per day, budget pace, trip stats,
+  summary image (PNG).
+- **History**: activity log (who / what / when) with restore; Undo instead of "are you sure" (soft delete, 30-day purge).
+- **Live**: the trip page refreshes when others change it; push notifications when someone else adds a bill
+  (per device, opt-in).
 - **Phone-friendly**: quick add (amount first), "View as" a person, search / filter, swipe to delete,
-  long-press to duplicate, pull to refresh, light / dark theme, onboarding sample trip.
-- **Ops**: nightly D1 → R2 backup with restore script; security headers / strict CSP; no third-party requests.
+  long-press to duplicate, pull to refresh, light / dark theme, onboarding sample trip, keyboard shortcuts
+  (N, /, S, H, ?), installable PWA; bills added, edited or deleted offline sync when back online.
+- **Ops**: nightly D1 → R2 backup with restore script; security headers / strict CSP; no third-party requests from
+  the page; per-person rate limits.
 
 ## Run locally
 
 ```bash
 npm install
 npm run db:migrate:local
-npm run dev            # http://localhost:8787 (DEV_IDENTITY=1: you are dev@example.com)
+npm run dev            # http://localhost:8787 (DEV_IDENTITY=1: you are dev@example.com; SCAN_FAKE=1: canned scans)
 ```
 
 ## Test
@@ -37,7 +45,8 @@ npm run dev            # http://localhost:8787 (DEV_IDENTITY=1: you are dev@exam
 | `npm run test:integration` | Worker + D1 + R2 inside workerd |
 | `npm run test:system` | API flows over HTTP (`TARGET_URL`, default `http://localhost:8787`) |
 | `npm run test:security` | Headers, CSRF, injection, XSS, IDOR, limits, receipts, view links, Access |
-| `npm run test:e2e` | Playwright UI flows (Chromium) |
+| `npm run test:e2e` | Playwright UI flows + axe accessibility checks (Chromium) |
+| `npm run test:ratelimit` | Rate limits (runs last in the gates: it uses up the link budget for a minute) |
 | `npm run test:compat` | E2E on every project (Firefox currently can't launch on the dev Mac — see ISSUES #1) |
 | `npm run test:local` | All of the above vs local `wrangler dev` (Chromium, WebKit, Pixel 7, iPhone 14) |
 | `npm run test:prod` | System + security + E2E vs prod through Access (needs `.env.test`) |

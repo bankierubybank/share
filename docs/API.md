@@ -1,23 +1,26 @@
-# API Contract (v8 — app 0.11.0)
+# API Contract (v8 — app 0.11.1)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
 
 Write requests (`POST/PUT/PATCH`) with a body **must** send `Content-Type: application/json`, else `415`.
-Body limit 32 KiB → `413` (also enforced for chunked bodies without Content-Length). Exception: receipt upload (`PUT …/receipt`) takes a raw `image/jpeg|png|webp` body ≤ 2 MiB.
+Body limit 32 KiB → `413` (also enforced for chunked bodies without Content-Length). Exceptions: receipt upload (`PUT …/receipt`) and receipt scan (`POST …/scan`, 0.11) take a raw `image/jpeg|png|webp` body ≤ 2 MiB.
 Errors: `{ "error": { "code": string, "message": string } }`.
 
 | Status | code |
 |--------|------|
 | 400 | `bad_request` / `validation` |
 | 401 | `unauthorized` (no valid Access identity) |
-| 403 | `not_member` (you're not linked to anyone in this trip) / `claim_required` (pre-0.4 trip, nobody linked yet) |
-| 404 | `not_found` |
+| 403 | `not_member` (you're not linked to anyone in this trip) / `claim_required` (pre-0.4 trip, nobody linked yet) / `email_locked` (0.10) |
+| 404 | `not_found` / `push_off` (0.11, notifications not configured) |
 | 405 | `method_not_allowed` |
-| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` |
+| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` / `missing_members` (move/merge) / `others_linked` (0.10, delete forever) / `limit` (0.11, categories) / `stale` (0.11, `ifUpdatedAt`) |
+| 410 | `trip_deleted` (0.10) — the trip is in the bin: every `/groups/:gid/**` route except `POST …/restore` and `DELETE /groups/:gid`; body has `deletedAt`. Non-members get `404` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
-| 429 | `rate_limited` (0.6) + `Retry-After: 60` — per identity: 600 `/api` requests a minute; 30 a minute on `/api/join/*` + `/api/view/*` |
+| 429 | `rate_limited` (0.6) + `Retry-After: 60` — per identity: 600 `/api` requests a minute; 30 a minute on `/api/join/*` + `/api/view/*`; (0.11) 10 scans a minute |
+| 500 | `internal` |
+| 502 | `scan_failed` (0.11, the model gave no usable answer) |
 
 ## Types
 
@@ -29,6 +32,7 @@ Member  = { id; name; promptpay: string | null;        // normalized PromptPay i
 MyGroup = Group & { memberId; memberName }              // a trip I'm linked to
 Share   = { memberId: string; amount: number }
 Category = 'food'|'groceries'|'lodging'|'transport'|'activities'|'shopping'|'utilities'|'other'
+         | `c:${string}`                                // 0.11: one of the trip's own categories
 Split   = { mode: 'equal';    members: string[] }                         // remainder → first in order
         | { mode: 'exact';    shares: Share[] }                           // sum == amount
         | { mode: 'shares';   weights: { memberId; weight: int 0..10000 }[] }   // ≥1 weight > 0
@@ -124,7 +128,7 @@ Both join routes share the stricter link rate limit. Activity: `invite.create`, 
 | POST | `/api/groups/:gid/scan` | raw JPEG/PNG/WebP ≤ 2 MB | (0.11) `{ scan: { description?, amount?, date?, category?, fx?: { currency, amount }, items?: [{ description, amount }], serviceBp?, taxBp? } }` (0.11.1: items only when they rebuild the total) — suggestions only; 429 after 10/min; 502 `scan_failed` |
 | GET | `/api/me/contacts` | – | (0.11) `{ contacts: [{ email, name }] }` people linked in my live trips (not me, not service tokens) |
 | GET | `/api/push/key` | – | (0.11) `{ publicKey }` VAPID public key; 404 `push_off` when not configured |
-| POST | `/api/me/push` | `{ endpoint, keys: { p256dh, auth }, lang? }` | (0.11) `201`; endpoint must be a browser push service (FCM, Mozilla, Apple, WNS) |
+| POST | `/api/me/push` | `{ endpoint, keys: { p256dh, auth }, lang? }` | (0.11) `201`; endpoint must be a browser push service (FCM, Mozilla, Apple, WNS); ≤ 10 devices per identity (oldest dropped) |
 | DELETE | `/api/me/push` | `{ endpoint }` | (0.11) `204` |
 | POST | `/api/groups/:gid/restore` | `{}` | (0.10) `{ group }` back from the bin (any of its people); `409` if not in the bin |
 | GET | `/api/me/deleted` | – | (0.10) `{ trips: [{ id, name, currency, deletedAt, purgeAt, alone }] }` my trips in the bin |
@@ -178,14 +182,15 @@ Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|m
 
 **Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
-Activity actions: `group.create|rename|currency|archive|unarchive`, `member.add|rename|promptpay|email|link|remove`,
-`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`.
+Activity actions: `group.create|rename|currency|archive|unarchive|budget|dates`, `member.add|rename|promptpay|email|link|remove|join`,
+`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`, `invite.create|revoke`, `category.add` (0.11).
 
 ## Scheduled (daily 00:17 UTC)
 1. Backup all tables → R2 `share-backups/backups/YYYY-MM-DD.json.gz` (keep 30 days). Restore: `scripts/restore-backup.mjs`.
 2. Materialize due recurring bills (monthly keeps anchor day, clamped; weekly +7d; ≤60 per run each). Invalid template
    or the group at 5000 bills → deactivated with `lastError`.
 3. Purge bills soft-deleted > 30 days (and their receipts).
+4. (0.10) Remove trips in the bin > 30 days, with their receipts.
 
 ### Settlement algorithm
 Greedy: sort creditors and debtors by |net| desc (tie → member id), match largest debtor with

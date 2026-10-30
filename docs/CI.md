@@ -1,7 +1,9 @@
-# CI / CD (draft — #18)
+# CI / CD (#18)
 
-Status: **drafted, not active.** The workflows in `.github/workflows/` start running once the repo is pushed to GitHub
-and the secrets below exist. Until then, `npm run ship` stays the way to release.
+Status (2026-10-30): **`ci` is live** — it runs on every push to `main` and every PR (v0.11: 452 passed).
+**`deploy` is not:** the repo has no Actions secrets yet, so after each green `ci` it fails at its first Cloudflare
+step (nothing is deployed; it shows as skipped when `ci` was cancelled). Until step 3 below is done, `npm run ship`
+stays the way to release.
 
 ## What runs
 
@@ -29,16 +31,3 @@ migrations stay, so they must be backwards-compatible). Deploys never run in par
    - `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` — the `share-tests` service token (rotate it first: ISSUES #9).
 4. Settings → Environments → `production` → optionally *Required reviewers* (you) to approve each deploy.
 5. Settings → Branches → protect `main`: require the `ci / local-gate` check.
-
-## Repo name ideas
-
-| Name | Why |
-|------|-----|
-| `share` | Matches the Worker, D1 (`share-db`) and R2 names — zero renaming. |
-| `share-bills` | Same, but says what it is when it sits among other repos. |
-| `tripsplit` | Says the use case (trips) — fine as a repo name even if the Worker stays `share`. |
-| `haan` (หาร, "divide") | Short Thai word for splitting a bill (`หารกัน`); nice if the app ever gets a brand. |
-| `kitty` | The shared trip pot; nods to KittySplit. |
-
-Recommendation: **`share`** (or `share-bills` if the short name is taken) — every Cloudflare resource is already
-named `share*`, so docs, scripts and the workflows need no edits.

@@ -11,10 +11,13 @@ Cloudflare Access  (configured manually by owner; service token for automated te
 Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement = smart (runs near D1)
    ├── middleware: security headers, identity (Access JWT verify → email / svc:<id>), body limit, content-type,
    │               Server-Timing (D1 round trips + time)
-   ├── /api/*  → routes (src/routes.ts) → D1 (binding DB, database "share-db", APAC primary)
-   │                                     → R2 RECEIPTS ("share-receipts": receipt photos)
+   ├── /api/*  → routes (src/routes*.ts) → D1 (binding DB, database "share-db", APAC primary)
+   │                                      → R2 RECEIPTS ("share-receipts": receipt photos)
+   │                                      → Workers AI (binding AI: receipt scan, 0.11)
+   │                                      → browser push services (Web Push after a bill, 0.11; waitUntil)
    └── scheduled (daily 00:17 UTC) → backup D1 → R2 BACKUPS ("share-backups"),
-                                    materialize recurring bills, purge 30-day-old soft deletes
+                                    materialize recurring bills, purge 30-day-old soft deletes,
+                                    remove trips 30 days in the bin
                                     (independent steps: one failing doesn't skip the others)
 ```
 
@@ -23,8 +26,15 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 | Path | What |
 |------|------|
 | `src/index.ts` | Worker entry, middleware, asset passthrough |
-| `src/routes.ts` | API routes |
+| `src/routes.ts` | API routes (core: trips, people, bills, summary, activity, recurring) + group middleware, daily job |
 | `src/db.ts` | D1 queries (all parameterized) |
+| `src/routes-invite.ts`, `src/db-invite.ts` | Invite links / join (0.6) |
+| `src/db-overview.ts` | Home overview: my position per trip + spending per month (0.8) |
+| `src/routes-v11.ts`, `src/db-v11.ts` | Trip categories, receipt scan, contacts, push subscriptions + `notifyTrip` (0.11) |
+| `src/lib/scan.ts` | Receipt scan: prompt, JSON schema, `normalizeScan` / `parseReceiptDate` (untrusted model output) |
+| `src/lib/webpush.ts` | Web Push: VAPID JWT (RFC 8292) + aes128gcm payload encryption (RFC 8291), WebCrypto only |
+| `src/lib/ratelimit.ts` | Which rate limits apply to a request and under which key |
+| `src/env-extra.d.ts` | `Env` additions wrangler types can't see (`VAPID_PRIVATE_KEY` secret, `SCAN_FAKE`) |
 | `src/lib/money.ts` | Equal split, balances (multi-payer, payments), settlement (pure) |
 | `src/lib/split.ts` | Largest-remainder allocation (shares/percent), itemized + service/VAT, fx conversion (BigInt) |
 | `src/lib/identity.ts` | Verified identity (JWT email / `svc:<id>`), dev header identity, display label |
@@ -39,22 +49,24 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 | `src/lib/ids.ts` | Random ids (base64url, 128-bit for groups) |
 | `migrations/*.sql` | D1 schema migrations |
 | `web/` | Frontend source (Vite root). `main.ts` app, `api.ts` client, `money.ts` formatting, `icons.ts` (bundled SVG Material Symbols), `theme.ts`, `promptpay.ts` (QR), `export.ts` (CSV), `image.ts` (receipt downscale), `views/` |
-| `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts` |
-| `web/src/` (others) | `i18n.ts` (TH/EN), `gestures.ts` (swipe/long-press/pull), `sample.ts` (onboarding), `categories.ts`, `dialogs.ts`, `dom.ts` (`h()`), `router.ts`, `store.ts` (recent groups) |
+| `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts`, `join.ts` (invite links), `categories-dialog.ts` |
+| `web/src/` (others) | `i18n.ts` (TH/EN), `gestures.ts` (swipe/long-press/pull), `sample.ts` (onboarding), `categories.ts` (built-in + trip categories), `dialogs.ts`, `dom.ts` (`h()`), `router.ts`, `store.ts` (recent groups), `pwa.ts` (install), `offline.ts` (outbox + saved page), `push.ts` (subscribe), `remind.ts` (settle-up reminder text), `summary-image.ts` (canvas PNG) |
+| `web/public/sw.js` | Service worker: precache, cache-first bundles, offline shell, push + notification click |
 | `web/public/theme.js` | Tiny blocking script: applies saved light/dark before first paint |
 | `web/public/_headers` | Security headers (CSP etc.) + immutable caching for static assets (the Worker no longer serves them) |
-| `.github/workflows/` | CI (local gate) + deploy (backup → deploy → prod tests → rollback) — draft, see `docs/CI.md` |
+| `.github/workflows/` | CI (local gate, runs on every push/PR) + deploy (backup → deploy → prod tests → rollback; waits for its secrets) — see `docs/CI.md` |
 | `dist/` | Built assets (git-ignored) |
 | `test/unit` | Pure logic (vitest, node) |
 | `test/integration` | Worker + D1 in workerd (`@cloudflare/vitest-plugin`) |
 | `test/system` | Full HTTP API flows vs running server (`TARGET_URL`) |
 | `test/security` | Headers, injection, validation, auth, IDOR vs running server |
-| `test/e2e` | Playwright UI flows (`fixtures.ts` attaches Access token to app origin only); projects = chromium, firefox, webkit, Pixel 7, iPhone 14 (compatibility) |
-| `scripts/` | `test-local.sh`, `test-prod.sh`, `ship.sh`, `verify-migration.sh` (+ `migration-seed.sql`), `restore-backup.mjs` |
+| `test/e2e` | Playwright UI flows (`fixtures.ts` attaches Access token to app origin only); projects = chromium, firefox, webkit, Pixel 7, iPhone 14 (compatibility); `a11y.spec.ts` = axe checks |
+| `scripts/` | `test-local.sh`, `test-prod.sh`, `ship.sh`, `verify-migration.sh` (+ `migration-seed.sql`), `restore-backup.mjs`, `render-icons.mjs` (PWA PNGs), `vapid-keys.mjs` (one-off key pair), `scan-lab/` (scan prompt lab, never deployed) |
 
 ## Data model (D1 / SQLite)
 
-- `groups(id PK, name, currency, archived_at, created_at, budget)` — `budget` (0006): optional trip budget, minor units; `deleted_at` (0007): in the bin since (30 days, then the daily job removes it)
+- `groups(id PK, name, currency, archived_at, created_at, budget)` — `budget` (0006): optional trip budget, minor units; `deleted_at` (0007): in the bin since (30 days, then the daily job removes it);
+  `start_date`, `end_date` (0008): optional trip dates `YYYY-MM-DD`
 - `members(id PK, group_id FK, name, promptpay, email, position, created_at)` unique `(group_id, lower(name))`,
   unique `(group_id, email)` where set; index on `email` (my trips). `email` = linked identity (0004).
   `seen_at` (0007): when that identity first opened the trip — after that only they can change `email`.
@@ -70,6 +82,10 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 - `groups.view_id` (unique, nullable): read-only link id, separate from the edit id
 - `groups.invite_hash` (unique, nullable) + `groups.invite_expires` (0005): SHA-256 of the current invite token
   (the token itself is never stored), expiry 14 days after creation
+- `categories(id PK, group_id FK, name, icon, created_at)` (0008) unique `(group_id, lower(name))`, ≤ 20 per trip;
+  bills point to one as `category = 'c:<id>'` (no FK: a deleted category shows as Other)
+- `push_subscriptions(endpoint PK, identity, p256dh, auth, lang, created_at)` (0008): per device, ≤ 10 per identity;
+  not trip-scoped (an identity's devices get notices from every trip it's linked to)
 
 Shares and payers are stored resolved (cents per member), so the summary is a simple aggregation; `split_json`
 keeps the user's input (weights / percents / items) for editing. Writes of a bill + its children + activity
@@ -78,7 +94,7 @@ row use `DB.batch()` (atomic). Deletes are soft (`deleted_at`), purged after 30 
 **Migrations that rebuild a table** (0002): dropping a parent table fires `ON DELETE CASCADE` into children
 even with `PRAGMA defer_foreign_keys` — back the children up and restore them (see 0002). Always run
 `bash scripts/verify-migration.sh` before applying such a migration remotely, and export prod first
-(`npx wrangler d1 export share-db --remote --output backup-before-XXXX.sql`).
+(`npx wrangler d1 export share-db --remote --output .tmp/prod-before-XXXX.sql`).
 
 ## Performance (v0.5)
 
@@ -213,5 +229,5 @@ batches far more (ISSUES #28). Rules:
 - `md-menu` uses `quick` (no animation): its close animation hung (scale(Infinity)) and the menu couldn't reopen.
 - **Integer minor units** everywhere; formatting via `Intl.NumberFormat` per group currency.
 - **No in-app accounts**: Access handles identity; a person in a trip is "linked" by putting their Access email on
-  them (or by them claiming it). No invites/requests flow — someone in the trip adds your email.
+  them, by them claiming a pre-0.4 trip, or (0.6) by opening an invite link and picking who they are.
 - Worker name `share` → `https://share.bankierubybank.workers.dev` (the `xxx` in the brief).
