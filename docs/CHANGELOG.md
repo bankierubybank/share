@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.2 — 2026-10-30
+
+Fix from the 2026-10-30 docs/code cross-check (ISSUES #57).
+
+- **Push notifications no longer reveal the trip id to push services.** The Web Push `Topic` header (used by the
+  service to replace an undelivered notice) is sent unencrypted to Google / Apple / Mozilla / Microsoft and was the
+  trip id; it is now a SHA-256 of it (32 base64url chars, same per trip). The notice itself was already encrypted.
+- Renaming or deleting a trip category now shows in the history ("Changed / Removed the category …"), like adding one.
+
 ## 0.11.1 — 2026-10-30
 
 Receipt scan tuned (owner: "Tune the prompt"). Measured with a new prompt lab (`scripts/scan-lab/`: 5 varied sample

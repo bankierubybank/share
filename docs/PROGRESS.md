@@ -2,10 +2,10 @@
 
 _Last updated: 2026-10-30_
 
-## Status: v0.11.1 (receipt scan tuned) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 22c45486)
+## Status: v0.11.2 (push topic fix) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 8f5cfff3)
 
-Local 2026-10-30 (0.11.1): unit 207, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
-Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green (a first run had 2 network timeouts from the dev Mac, ETIMEDOUT; rerun clean). Real scan on prod: merchant, total, date, category and all 4 items. Prompt lab (scripts/scan-lab): 25/25 on 5 sample receipts.
+Local 2026-10-30 (0.11.2): unit 207, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
+Prod 2026-10-30 (8f5cfff3): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green. Prompt lab (scripts/scan-lab): 25/25 on 5 sample receipts (0.11.1).
 
 | Area | State |
 |------|-------|
@@ -150,6 +150,6 @@ Prod 2026-10-30 (22c45486): system 36, security 112 (+8 local-only), E2E 168 (+1
 ## Next ideas (backlog)
 - Not picked yet: live FX rates, bill templates, import Splitwise/KittySplit CSV, leave trip, hide search/filters
   on short trips, staging env, error tracking/uptime, restore drill, Durable Object per trip.
-- Open tech debt: ISSUES #52 (0.10 review leftovers), #57 (push Topic header).
+- Open tech debt: ISSUES #52 (0.10 review leftovers).
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).

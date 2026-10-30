@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
-import { pushDeps } from "../../src/routes-v11";
+import { pushDeps, pushTopic } from "../../src/routes-v11";
 
 // v0.11: a trip's own categories (#12), trip dates (#7), receipt scan (#2, canned via SCAN_FAKE), email suggestions
 // (#9), Web Push (#6, outgoing requests captured), retry-safe offline edits (#8, ifUpdatedAt).
@@ -44,7 +44,13 @@ describe("trip categories", () => {
     expect((await call("c11@x.io", "PATCH", `/api/groups/${t.gid}/categories/${cid}`, { name: "Scuba", icon: "spa" })).json.category.name).toBe("Scuba");
     expect((await call("c11@x.io", "GET", `/api/groups/${t.gid}/full`)).json.categories).toEqual([{ id: cid, name: "Scuba", icon: "spa" }]);
     expect((await call("c11@x.io", "DELETE", `/api/groups/${t.gid}/categories/${cid}`)).status).toBe(204);
+    expect((await call("c11@x.io", "DELETE", `/api/groups/${t.gid}/categories/${cid}`)).status).toBe(404);
     expect((await call("c11@x.io", "GET", `/api/groups/${t.gid}`)).json.bills[0].category).toBe(`c:${cid}`);
+    // Rename and delete are in the history (with the name), once each.
+    const acts = (await call("c11@x.io", "GET", `/api/groups/${t.gid}/activity`)).json.activity
+      .filter((a: { action: string }) => a.action.startsWith("category."))
+      .map((a: { action: string; entityId: string; detail: { name: string } }) => [a.action, a.entityId, a.detail.name]);
+    expect(acts).toEqual([["category.remove", cid, "Scuba"], ["category.update", cid, "Scuba"], ["category.add", cid, "Diving"]]);
     // ...and editing that bill again needs a valid category (the dialog then shows Other).
     expect((await call("c11@x.io", "PUT", `/api/groups/${t.gid}/bills/${b.json.bill.id}`, bill(t.ids, { category: "other" }))).status).toBe(200);
   });
@@ -56,6 +62,8 @@ describe("trip categories", () => {
     expect((await call("c11b@x.io", "POST", `/api/groups/${b.gid}/bills`, bill(b.ids, { category: `c:${cid}` }))).status).toBe(400);
     expect((await call("c11b@x.io", "PATCH", `/api/groups/${b.gid}/categories/${cid}`, { name: "Stolen", icon: "label" })).status).toBe(404);
     expect((await call("c11b@x.io", "DELETE", `/api/groups/${b.gid}/categories/${cid}`)).status).toBe(404);
+    // ...and those refused attempts left nothing in that trip's history.
+    expect((await call("c11b@x.io", "GET", `/api/groups/${b.gid}/activity`)).json.activity.filter((x: { action: string }) => x.action.startsWith("category."))).toEqual([]);
     for (let i = 1; i < 20; i++) expect((await call("c11b@x.io", "POST", `/api/groups/${a.gid}/categories`, { name: `C${i}`, icon: "label" })).status).toBe(201);
     expect((await call("c11b@x.io", "POST", `/api/groups/${a.gid}/categories`, { name: "C21", icon: "label" })).status).toBe(409);
     const vid = (await call("c11b@x.io", "POST", `/api/groups/${a.gid}/view-link`, {})).json.viewId;
@@ -187,6 +195,10 @@ describe("Web Push", () => {
     expect(h.Authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=/);
     expect(JSON.parse(atob(h.Authorization.split(" ")[1].slice(2).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).aud).toBe("https://updates.push.services.mozilla.com");
     expect(new TextDecoder().decode(sent[0].init.body as Uint8Array)).not.toContain("Dive"); // encrypted
+    // The Topic header isn't encrypted: never the trip id (ISSUES #57), but stable per trip so notices coalesce.
+    expect(h.Topic).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(h.Topic).toBe(await pushTopic(t.gid));
+    expect(JSON.stringify(h)).not.toContain(t.gid);
 
     // The push service says that browser is gone → its row is removed.
     sent.length = 0;

@@ -1,4 +1,4 @@
-# API Contract (v8 — app 0.11.1)
+# API Contract (v8 — app 0.11.2)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
@@ -182,8 +182,8 @@ Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|m
 
 **Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
-Activity actions: `group.create|rename|currency|archive|unarchive|budget|dates`, `member.add|rename|promptpay|email|link|remove|join`,
-`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`, `invite.create|revoke`, `category.add` (0.11).
+Activity actions: `group.create|rename|currency|archive|unarchive|budget|dates|delete|restore`, `member.add|rename|promptpay|email|link|remove|join`,
+`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`, `invite.create|revoke`, `category.add` (0.11), `category.update|remove` (0.11.2; `{ name }`).
 
 ## Scheduled (daily 00:17 UTC)
 1. Backup all tables → R2 `share-backups/backups/YYYY-MM-DD.json.gz` (keep 30 days). Restore: `scripts/restore-backup.mjs`.

@@ -1323,6 +1323,8 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       case "group.archive": return t("act.groupArchive");
       case "group.dates": return t("act.groupDates");
       case "category.add": return t("act.categoryAdd", { name: nm("name") });
+      case "category.update": return t("act.categoryUpdate", { name: nm("name") });
+      case "category.remove": return t("act.categoryRemove", { name: nm("name") });
       case "group.delete": return t("act.groupDelete");
       case "group.restore": return t("act.groupRestore");
       case "group.budget": return d.to ? t("act.groupBudget", { amount: money(Number(d.to)) }) : t("act.groupBudgetOff");

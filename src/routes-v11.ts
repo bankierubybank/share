@@ -6,7 +6,7 @@ import { readLimited } from "./lib/body";
 import { ENTITY_ID_RE } from "./lib/ids";
 import { actorLabel } from "./lib/identity";
 import { normalizeScan, runScan } from "./lib/scan";
-import { buildPushRequest, isPushEndpoint } from "./lib/webpush";
+import { b64uEncode, buildPushRequest, isPushEndpoint } from "./lib/webpush";
 import { cleanName, CUSTOM_ICONS, ValidationError } from "./lib/validate";
 import type { AppEnv, GroupEnv } from "./routes";
 
@@ -24,6 +24,15 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 /** Only the big browser push services: a stored endpoint is a URL the Worker will POST to. */
 const PUSH_HOSTS = [/^fcm\.googleapis\.com$/, /^updates\.push\.services\.mozilla\.com$/, /^web\.push\.apple\.com$/, /(^|\.)push\.apple\.com$/, /\.notify\.windows\.com$/];
 export const allowedPushEndpoint = (url: string) => isPushEndpoint(url) && PUSH_HOSTS.some((re) => re.test(new URL(url).hostname));
+
+/**
+ * The push `Topic` header (lets the service replace an undelivered notice) travels unencrypted to Google / Apple /
+ * Mozilla / Microsoft, so it must not be the trip id (ids are secrets): a hash of it instead (ISSUES #57).
+ */
+export async function pushTopic(gid: string) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`share-push-topic:${gid}`)));
+  return b64uEncode(digest).slice(0, 32);
+}
 
 /** For tests: replaced to capture outgoing push requests instead of sending them. */
 export const pushDeps = { fetch: (url: string, init: RequestInit) => fetch(url, init) };
@@ -68,12 +77,13 @@ function message(lang: string, trip: string, e: PushEvent) {
 export async function notifyTrip(env: Env, gid: string, trip: string, actorIdentity: string | null, e: PushEvent, origin: string) {
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return 0;
   const vapid = { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: origin };
+  const topic = await pushTopic(gid);
   let sent = 0;
   for (const s of await v11.pushTargets(env.DB, gid, actorIdentity)) {
     try {
       const { title, body } = message(s.lang, trip, e);
       const { url, init } = await buildPushRequest({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        { title, body, url: `/g/${gid}`, tag: gid }, vapid, { ttl: 6 * 3600, topic: gid.slice(0, 32) });
+        { title, body, url: `/g/${gid}`, tag: gid }, vapid, { ttl: 6 * 3600, topic });
       const res = await pushDeps.fetch(url, init);
       if (res.status === 404 || res.status === 410) await v11.deletePushSubscription(env.DB, s.endpoint);
       else if (res.ok) sent++;
@@ -118,7 +128,7 @@ export function registerV11(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError, re
 
   g.delete("/categories/:cid", async (c) => {
     const cid = c.req.param("cid");
-    if (!ENTITY_ID_RE.test(cid) || !(await v11.deleteCategory(c.env.DB, gidOf(c), cid))) return apiError(c, 404, "not_found", "category not found");
+    if (!ENTITY_ID_RE.test(cid) || !(await v11.deleteCategory(c.env.DB, gidOf(c), cid, actor(c)))) return apiError(c, 404, "not_found", "category not found");
     return c.body(null, 204);
   });
 

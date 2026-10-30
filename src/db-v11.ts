@@ -21,7 +21,11 @@ export async function countCategories(db: D1Database, gid: string): Promise<numb
 /** Insert (no `cid`) or update; null = no such category in this trip. Throws on a duplicate name (UNIQUE). */
 export async function saveCategory(db: D1Database, gid: string, cid: string | null, name: string, icon: string, actor: string | null): Promise<CustomCategory | null> {
   if (cid) {
-    const r = await db.prepare("UPDATE categories SET name = ?, icon = ? WHERE id = ? AND group_id = ?").bind(name, icon, cid, gid).run();
+    const [r] = await db.batch([
+      db.prepare("UPDATE categories SET name = ?, icon = ? WHERE id = ? AND group_id = ?").bind(name, icon, cid, gid),
+      db.prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'category.update', ?, json_object('name', ?) WHERE changes() > 0")
+        .bind(entityId(), gid, actor, cid, name),
+    ]);
     return r.meta.changes ? { id: cid, name, icon } : null;
   }
   const id = entityId();
@@ -32,9 +36,14 @@ export async function saveCategory(db: D1Database, gid: string, cid: string | nu
   return { id, name, icon };
 }
 
-/** Bills keep pointing at the id (they read as "Other" from now on). */
-export async function deleteCategory(db: D1Database, gid: string, cid: string): Promise<boolean> {
-  return (await db.prepare("DELETE FROM categories WHERE id = ? AND group_id = ?").bind(cid, gid).run()).meta.changes > 0;
+/** Bills keep pointing at the id (they read as "Other" from now on). Logged with the name it had. */
+export async function deleteCategory(db: D1Database, gid: string, cid: string, actor: string | null): Promise<boolean> {
+  const [, r] = await db.batch([
+    db.prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'category.remove', id, json_object('name', name) FROM categories WHERE id = ? AND group_id = ?")
+      .bind(entityId(), gid, actor, cid, gid),
+    db.prepare("DELETE FROM categories WHERE id = ? AND group_id = ?").bind(cid, gid),
+  ]);
+  return r.meta.changes > 0;
 }
 
 // ---------- contacts ----------
