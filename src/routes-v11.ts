@@ -1,6 +1,7 @@
 // v0.11 routes: a trip's own categories (#12), receipt scan (#2), email suggestions (#9), Web Push (#6).
 // Registered by routes.ts (group router = members only; API router = any signed-in identity).
 import type { Context, Hono } from "hono";
+import { listMembers } from "./db";
 import * as v11 from "./db-v11";
 import { readLimited } from "./lib/body";
 import { ENTITY_ID_RE } from "./lib/ids";
@@ -53,20 +54,37 @@ function sniffImage(b: Uint8Array): string | null {
 
 // ---------- push messages ----------
 
-type PushEvent = { kind: "expense" | "payment"; who: string; description: string; amount: number; currency: string; to?: string };
+export type PushEvent =
+  | { kind: "expense" | "payment"; who: string; description: string; amount: number; currency: string; to?: string; toIdentity?: string | null }
+  | { kind: "comment"; who: string; description: string; text: string } // v0.12
+  | { kind: "added"; who: string }; // v0.12: someone put your sign-in email on a person in this trip
 
-function message(lang: string, trip: string, e: PushEvent) {
-  const th = lang === "th";
-  let amount: string;
+function formatAmount(th: boolean, amount: number, currency: string) {
   try {
-    amount = new Intl.NumberFormat(th ? "th-TH" : "en", { style: "currency", currency: e.currency, currencyDisplay: "narrowSymbol" })
-      .format(e.amount / 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: e.currency }).resolvedOptions().maximumFractionDigits ?? 2));
+    return new Intl.NumberFormat(th ? "th-TH" : "en", { style: "currency", currency, currencyDisplay: "narrowSymbol" })
+      .format(amount / 10 ** (new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2));
   } catch {
-    amount = `${e.amount} ${e.currency}`;
+    return `${amount} ${currency}`;
   }
-  const body = e.kind === "payment"
-    ? th ? `${e.who} โอนให้ ${e.to ?? ""} ${amount}` : `${e.who} paid ${e.to ?? ""} ${amount}`
-    : th ? `${e.who} เพิ่ม “${e.description}” · ${amount}` : `${e.who} added “${e.description}” · ${amount}`;
+}
+
+/** The notice for one browser: `recipient` = that browser's identity (a payment to them says "paid you"). */
+export function message(lang: string, trip: string, e: PushEvent, recipient?: string) {
+  const th = lang === "th";
+  let body: string;
+  if (e.kind === "comment") {
+    const text = [...e.text].length > 80 ? `${[...e.text].slice(0, 79).join("")}…` : e.text;
+    body = th ? `${e.who} ใน “${e.description}”: ${text}` : `${e.who} on “${e.description}”: ${text}`;
+  } else if (e.kind === "added") {
+    body = th ? `${e.who} เพิ่มคุณเข้าทริปนี้` : `${e.who} added you to this trip`;
+  } else {
+    const amount = formatAmount(th, e.amount, e.currency);
+    const toYou = e.kind === "payment" && !!recipient && e.toIdentity === recipient;
+    body = e.kind === "payment"
+      ? toYou ? (th ? `${e.who} โอนให้คุณ ${amount}` : `${e.who} paid you ${amount}`)
+        : th ? `${e.who} โอนให้ ${e.to ?? ""} ${amount}` : `${e.who} paid ${e.to ?? ""} ${amount}`
+      : th ? `${e.who} เพิ่ม “${e.description}” · ${amount}` : `${e.who} added “${e.description}” · ${amount}`;
+  }
   return { title: trip, body };
 }
 
@@ -74,14 +92,14 @@ function message(lang: string, trip: string, e: PushEvent) {
  * Tells everyone else in the trip (their browsers that turned notifications on). Never throws; dead subscriptions
  * (404/410 from the push service) are removed. Payloads are end-to-end encrypted to each browser.
  */
-export async function notifyTrip(env: Env, gid: string, trip: string, actorIdentity: string | null, e: PushEvent, origin: string) {
+export async function notifyTrip(env: Env, gid: string, trip: string, actorIdentity: string | null, e: PushEvent, origin: string, only?: string) {
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return 0;
   const vapid = { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: origin };
   const topic = await pushTopic(gid);
   let sent = 0;
-  for (const s of await v11.pushTargets(env.DB, gid, actorIdentity)) {
+  for (const s of await v11.pushTargets(env.DB, gid, actorIdentity, only)) {
     try {
-      const { title, body } = message(s.lang, trip, e);
+      const { title, body } = message(s.lang, trip, e, s.identity);
       const { url, init } = await buildPushRequest({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         { title, body, url: `/g/${gid}`, tag: gid }, vapid, { ttl: 6 * 3600, topic });
       const res = await pushDeps.fetch(url, init);
@@ -92,6 +110,28 @@ export async function notifyTrip(env: Env, gid: string, trip: string, actorIdent
     }
   }
   return sent;
+}
+
+/**
+ * Sends a notice after the response (waitUntil), named after the caller's person in this trip. `build` gets the trip's
+ * people by id; returning null sends nothing. `only` = just that identity's browsers. Never throws.
+ */
+export function pushInBackground(
+  c: Context<GroupEnv>, build: (people: Map<string, { name: string; email: string | null }>, who: string) => PushEvent | null, only?: string,
+) {
+  const group = c.get("group");
+  const work = (async () => {
+    if (!c.env.VAPID_PUBLIC_KEY || !c.env.VAPID_PRIVATE_KEY) return;
+    const people = new Map((await listMembers(c.env.DB, group.id)).map((m) => [m.id, { name: m.name, email: m.email }]));
+    const me = c.get("me");
+    const e = build(people, (me && people.get(me)?.name) || "Someone");
+    if (e) await notifyTrip(c.env, group.id, group.name, c.get("identity"), e, new URL(c.req.url).origin, only);
+  })().catch((err) => console.warn("notify failed", err instanceof Error ? err.message : "error"));
+  try {
+    c.executionCtx.waitUntil(work);
+  } catch {
+    /* no execution context (some test harnesses): it still runs */
+  }
 }
 
 export function registerV11(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError, readJson }: V11Deps) {

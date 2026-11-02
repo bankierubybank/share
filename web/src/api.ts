@@ -42,6 +42,11 @@ export interface Bill {
   category: BillCategory; splitMode: SplitMode; split: Split; shares: Share[]; fx: Fx | null; hasReceipt: boolean;
   recurrenceId: string | null; createdBy: string | null; createdAt: string; updatedAt: string; commentCount: number;
 }
+/** A trip's favourite bill (v0.12): the bill as it would be saved (no date); null = no longer fits the trip. */
+export interface BillTemplate {
+  id: string; name: string;
+  bill: Pick<Bill, "kind" | "description" | "amount" | "payers" | "paidBy" | "category" | "splitMode" | "split" | "fx"> | null;
+}
 export interface Comment { id: string; billId: string; authorMemberId: string | null; actor: string | null; body: string; createdAt: string }
 export interface Subgroup { id: string; name: string; memberIds: string[] }
 /** Read-only snapshot from a view link: no group id (the edit secret), trimmed fields. */
@@ -140,7 +145,10 @@ export const api = {
     req<{
       group: Group; members: Member[]; bills: Bill[]; me: string | null; summary: Summary; recurring: Recurrence[];
       activity: Activity[]; subgroups: Subgroup[]; invite: InviteStatus; version: string; categories: CustomCategory[];
+      templates?: BillTemplate[]; // v0.12 (absent in pages saved offline by older versions)
     }>("GET", `${g(gid)}/full`),
+  /** Unlink me from this trip (v0.12); 409 `last_link` / `unsettled` (with `net`). */
+  leaveTrip: (gid: string) => req<void>("POST", `${g(gid)}/leave`, {}),
   /** "This is me": claim an unclaimed trip or move my link to another person. */
   setMe: (gid: string, memberId: string) => req<{ me: string }>("POST", `${g(gid)}/me`, { memberId }),
   updateGroup: (gid: string, patch: {
@@ -192,6 +200,9 @@ export const api = {
       ? req<{ category: CustomCategory }>("PATCH", `${g(gid)}/categories/${encodeURIComponent(cat.id)}`, { name: cat.name, icon: cat.icon })
       : req<{ category: CustomCategory }>("POST", `${g(gid)}/categories`, { name: cat.name, icon: cat.icon }),
   deleteCategory: (gid: string, cid: string) => req<void>("DELETE", `${g(gid)}/categories/${encodeURIComponent(cid)}`),
+  saveTemplate: (gid: string, name: string, bill: Omit<BillInput, "date">) =>
+    req<{ template: BillTemplate }>("POST", `${g(gid)}/templates`, { name, bill }),
+  deleteTemplate: (gid: string, tid: string) => req<void>("DELETE", `${g(gid)}/templates/${encodeURIComponent(tid)}`),
   /** Receipt photo → suggested bill fields (Workers AI). */
   scanReceipt: (gid: string, image: Blob) =>
     req<{ scan: ReceiptScan }>("POST", `${g(gid)}/scan`, undefined, { body: image, type: image.type || "image/jpeg" }),

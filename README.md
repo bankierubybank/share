@@ -12,16 +12,18 @@ Live: https://share.bankierubybank.workers.dev (behind Cloudflare Access).
 - **Trips**: create, invite people with a join link (`/join/<token>`, 14 days), archive (read-only), delete to a
   30-day bin (any member restores); merge two trips; read-only view links (`/v/<id>`); budget, first / last day,
   the trip's own categories.
-- **Home**: my trips with my balance in each, my spending per month, the bin.
+- **Home**: my trips with my balance in each (search, sort, pin), my spending per month, the bin; leave a trip
+  once you're settled.
 - **Bills**: split equally, by exact amounts, by shares, by percent, or itemized (service charge + VAT);
   several payers; foreign currency with a rate; categories; receipt photos; **receipt scan** (Workers AI fills the
-  bill in); comments; repeating weekly / monthly; move a bill to another trip; duplicate.
+  bill in, one photo or several at once); favourite bills (one tap); comments; repeating weekly / monthly; move a
+  bill to another trip; duplicate.
 - **Summary**: balances, the fewest "who pays whom" payments, Settle (full / partial, PromptPay QR for THB),
   settle-up history, reminders (share sheet), spending by category and per day, budget pace, trip stats,
   summary image (PNG).
 - **History**: activity log (who / what / when) with restore; Undo instead of "are you sure" (soft delete, 30-day purge).
-- **Live**: the trip page refreshes when others change it; push notifications when someone else adds a bill
-  (per device, opt-in).
+- **Live**: the trip page refreshes when others change it; push notifications (per device, opt-in) when someone
+  else adds a bill or payment, comments, or adds you to a trip.
 - **Phone-friendly**: quick add (amount first), "View as" a person, search / filter, swipe to delete,
   long-press to duplicate, pull to refresh, light / dark theme, onboarding sample trip, keyboard shortcuts
   (N, /, S, H, ?), installable PWA; bills added, edited or deleted offline sync when back online.

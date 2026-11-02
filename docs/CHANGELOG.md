@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.12.0 — 2026-10-30
+
+Owner picks: #4, #6, #7, #10, #12, #21, #22, #23, #24.
+
+### Favourite bills (#4)
+- In a bill → More → **Save as favourite** (rent, the usual Grab…). A new bill then shows the trip's favourites as
+  chips: one tap opens a new bill filled in from it, dated today. Remove a chip with its ×; Undo appears in its place.
+  Shared by everyone in the trip, ≤ 30 per trip. A favourite whose person was removed later stays listed, greyed,
+  only removable. Migration `0009_templates.sql` (`bill_templates`).
+- API: `GET/POST /groups/:gid/templates`, `DELETE /groups/:gid/templates/:tid`; `/full` returns `templates`.
+
+### Leave trip (#6)
+- Settings → **Leave trip…**: unlinks your sign-in from your person — your name and bills stay, the trip disappears
+  from your list and devices. Not while you owe or are owed money (409 `unsettled`), and not as the only linked
+  person (delete the trip instead). Works on archived trips. History: "Ben left the trip".
+- API: `POST /groups/:gid/leave`.
+
+### More notifications (#7)
+- Push for **comments** ("Ben on “Dinner”: Paid by card?") to everyone else in the trip; **"added you to this trip"**
+  to the person whose sign-in email someone put on a person (only them); a payment to you now reads
+  **"Ben paid you ฿500"**.
+
+### Several receipts at once (#10)
+- Trip menu → **Scan several receipts**: pick up to 10 photos; each is read in turn (waits a minute when the scan
+  limit is reached) and listed with what was read; **Review** opens the bill dialog filled in from it, the photo
+  attached. Nothing is saved until Save.
+
+### Home: search, sort, pin (#12)
+- With 5+ trips: a search box and a sort (recently opened / name / open balance). A star pins a trip to the top.
+  Pins and sort are remembered in this browser. A search typed while the list is still loading is kept (ISSUES #60).
+
+### Ops (#21, #22, #23, #24)
+- GitHub Actions pinned by commit SHA; Dependabot (weekly; Actions + npm minor/patch) proposes updates as PRs.
+- Daily job: `predeploy/` exports older than 30 days are pruned (the newest 3 always kept); activity older than
+  2 years is removed (≤ 5000 rows a run). Purge of old soft-deleted bills is one `DELETE … RETURNING` (no
+  select-then-delete gap).
+- Merge runs in **one batch** (one transaction: all or nothing), with statements per person instead of per bill —
+  people added, bills/payers/shares/splits remapped, comments, activity, the source stopped and archived. Move bill
+  likewise adds missing people in the same batch as the move.
+- `web/src/views/group.ts` 1630 → 1365 lines: settings → `group-settings.ts` (lazy chunk, 9 KB), activity text →
+  `group-activity.ts`; multi-scan in its own lazy `scan-queue.ts`.
+
 ## 0.11.2 — 2026-10-30
 
 Fix from the 2026-10-30 docs/code cross-check (ISSUES #57).

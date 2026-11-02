@@ -1,6 +1,6 @@
 {
   "name": "share",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "description": "Bill-splitting web app (Splitwise/KittySplit style) on Cloudflare Workers + D1",

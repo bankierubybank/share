@@ -23,6 +23,49 @@ export function rememberGroup(g: { id: string; name: string; currency: string; a
   }
 }
 
+// Home list prefs (v0.12, #12): pinned trips and the sort, per browser — conveniences only, never required.
+const PINS = "share.pins";
+const SORT = "share.tripSort";
+export type TripSort = "recent" | "name" | "balance";
+
+export function pinnedTrips(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(PINS) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function togglePin(id: string): boolean {
+  const pins = pinnedTrips();
+  const on = !pins.delete(id);
+  if (on) pins.add(id);
+  try {
+    localStorage.setItem(PINS, JSON.stringify([...pins].slice(-50)));
+  } catch {
+    /* storage unavailable */
+  }
+  return on;
+}
+
+export function tripSort(): TripSort {
+  try {
+    const v = localStorage.getItem(SORT);
+    return v === "name" || v === "balance" ? v : "recent";
+  } catch {
+    return "recent";
+  }
+}
+
+export function setTripSort(v: TripSort) {
+  try {
+    localStorage.setItem(SORT, v);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function forgetGroup(id: string) {
   try {
     localStorage.setItem(KEY, JSON.stringify(recentGroups().filter((x) => x.id !== id)));

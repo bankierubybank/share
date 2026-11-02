@@ -14,7 +14,8 @@ import { registerInvites } from "./routes-invite";
 import { stripMemberFromSubgroups } from "./db-social";
 import { overview, tripVersion } from "./db-overview";
 import { listCategories } from "./db-v11";
-import { notifyTrip, registerV11 } from "./routes-v11";
+import { pushInBackground, registerV11 } from "./routes-v11";
+import { registerV12, templateView } from "./routes-v12";
 
 /** `identity`: verified caller (src/lib/identity.ts), set by src/index.ts; null = unknown → 401 on trip routes. */
 export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
@@ -22,11 +23,13 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.11.2";
+export const VERSION = "0.12.0";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 /** Days a deleted trip stays in the bin (v0.10). */
 export const BIN_DAYS = 30;
+/** History is kept 2 years (v0.12); restorable entries are only ever 30 days old anyway. */
+export const ACTIVITY_DAYS = 730;
 
 export function apiError(c: Context, status: number, code: string, message: string) {
   return c.json({ error: { code, message } }, status as 400);
@@ -99,6 +102,7 @@ export async function scheduledMaintenance(env: Env) {
         if (keys.length) await env.RECEIPTS.delete(keys);
       }
     }],
+    ["activity", () => db.pruneActivity(env.DB, ACTIVITY_DAYS)],
   ];
   const failed: string[] = [];
   for (const [name, run] of steps) {
@@ -182,7 +186,8 @@ g.use("*", async (c, next) => {
   }
   // Revoking a read-only or invite link (and saying who you are) must always be possible, even while archived.
   const isRevoke = m === "DELETE" && /\/(view-link|invite)\/?$/.test(c.req.path);
-  if (group.archived && !deletedAt && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !(isRoot && (m === "PATCH" || m === "DELETE")))
+  const isLeave = m === "POST" && /\/groups\/[^/]+\/leave\/?$/.test(c.req.path); // v0.12: leaving an archived trip is fine
+  if (group.archived && !deletedAt && m !== "GET" && m !== "HEAD" && !isRevoke && !isClaim && !isLeave && !(isRoot && (m === "PATCH" || m === "DELETE")))
     return apiError(c, 409, "archived", "group is archived; unarchive it to make changes");
   // First visit: from now on this person's sign-in email can only be changed by them (v0.10).
   if (meId && !access.seen) await db.markSeen(c.env.DB, gid, meId);
@@ -215,6 +220,7 @@ g.get("/full", async (c) => {
     invite: p.invite,
     version: p.version,
     categories: p.categories,
+    templates: templateView(p.templates, new Set(p.members.map((m) => m.id)), group.currency, p.categories), // v0.12
   });
 });
 
@@ -288,7 +294,9 @@ g.post("/members", async (c) => {
   if ((await db.countRows(c.env.DB, "members", gid)) >= LIMITS.membersPerGroup)
     return apiError(c, 409, "conflict", `at most ${LIMITS.membersPerGroup} members per group`);
   try {
-    return c.json({ member: await db.addMember(c.env.DB, gid, input.name!, input.promptpay ?? null, input.email ?? null, actor(c)) }, 201);
+    const member = await db.addMember(c.env.DB, gid, input.name!, input.promptpay ?? null, input.email ?? null, actor(c));
+    notifyAdded(c, member.email);
+    return c.json({ member }, 201);
   } catch (e) {
     if (isUnique(e)) return memberConflict(c, e);
     throw e;
@@ -307,13 +315,31 @@ g.patch("/members/:mid", async (c) => {
   }
   if (patch.email === null && (await wouldUnlinkLast(c, mid))) return lastLink(c);
   try {
+    const before = patch.email === undefined ? undefined : (await db.getMember(c.env.DB, gidOf(c), mid))?.email;
     const member = await db.updateMember(c.env.DB, gidOf(c), mid, patch, actor(c));
     if (!member) return apiError(c, 404, "not_found", "member not found");
+    if (patch.email !== undefined && member.email !== before) notifyAdded(c, member.email);
     return c.json({ member });
   } catch (e) {
     if (isUnique(e)) return memberConflict(c, e);
     throw e;
   }
+});
+
+/**
+ * Leave the trip (v0.12, #6): unlinks my sign-in from my person — my bills and name stay, I just can't open it any more.
+ * Not as the last linked person (delete the trip instead), and not while I owe or am owed money.
+ */
+g.post("/leave", async (c) => {
+  const gid = gidOf(c);
+  const me = c.get("me")!;
+  if ((await db.linkedCount(c.env.DB, gid)) <= 1)
+    return apiError(c, 409, "last_link", "you're the only one who can open this trip; delete it instead");
+  const [members, bills] = await Promise.all([db.listMembers(c.env.DB, gid), db.listBills(c.env.DB, gid)]);
+  const net = summaryOf(members, bills).balances.find((b) => b.memberId === me)?.net ?? 0;
+  if (net !== 0) return c.json({ error: { code: "unsettled", message: "settle up before leaving this trip", net } }, 409);
+  await db.leaveTrip(c.env.DB, gid, me, actor(c));
+  return c.body(null, 204);
 });
 
 g.delete("/members/:mid", async (c) => {
@@ -485,24 +511,22 @@ g.delete("/recurring/:rid", async (c) => {
 registerSocial(api, g, { apiError, readJson, summaryOf });
 registerInvites(api, g, { apiError, readJson });
 registerV11(api, g, { apiError, readJson });
+registerV12(g, { apiError, readJson }, async (c) => {
+  const [memberIds, categories] = await Promise.all([memberIdSet(c), listCategories(c.env.DB, gidOf(c))]);
+  return { memberIds, categories };
+});
 
 /** Push to everyone else in the trip (v0.11), after the response: a slow push service never delays the save. */
 function notifyOthers(c: GCtx, bill: db.Bill) {
-  const group = c.get("group");
-  const names = new Map<string, string>();
-  const work = (async () => {
-    for (const m of await db.listMembers(c.env.DB, group.id)) names.set(m.id, m.name);
-    const me = c.get("me");
-    await notifyTrip(c.env, group.id, group.name, c.get("identity"), {
-      kind: bill.kind, who: (me && names.get(me)) || "Someone", description: bill.description, amount: bill.amount, currency: group.currency,
-      to: bill.kind === "payment" ? names.get(bill.shares[0]?.memberId ?? "") : undefined,
-    }, new URL(c.req.url).origin);
-  })().catch((e) => console.warn("notify failed", e instanceof Error ? e.message : "error"));
-  try {
-    c.executionCtx.waitUntil(work);
-  } catch {
-    /* no execution context (some test harnesses): it still runs */
-  }
+  pushInBackground(c, (people, who) => {
+    const to = bill.kind === "payment" ? people.get(bill.shares[0]?.memberId ?? "") : undefined;
+    return { kind: bill.kind, who, description: bill.description, amount: bill.amount, currency: c.get("group").currency, to: to?.name, toIdentity: to?.email };
+  });
+}
+
+/** v0.12 (#7): someone put a sign-in email on a person here → that person hears about it (not when it's you). */
+function notifyAdded(c: GCtx, email: string | null | undefined) {
+  if (email && email !== c.get("identity")) pushInBackground(c, (_p, who) => ({ kind: "added", who }), email);
 }
 
 api.route("/groups/:gid", g);

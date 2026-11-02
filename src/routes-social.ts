@@ -7,6 +7,7 @@ import { ENTITY_ID_RE, GROUP_ID_RE } from "./lib/ids";
 import { matchMembersByName, parseComment, parseMove, parseSubgroup, SOCIAL_LIMITS } from "./lib/social";
 import { actorLabel } from "./lib/identity";
 import type { AppEnv, GroupEnv } from "./routes";
+import { pushInBackground } from "./routes-v11";
 
 type GCtx = Context<GroupEnv>;
 
@@ -45,6 +46,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
       return apiError(c, 409, "conflict", `at most ${SOCIAL_LIMITS.commentsPerBill} comments per bill`);
     // Always the signed-in person (v0.10): "View as" changes what you see, never who you post as.
     const comment = await social.addComment(c.env.DB, gidOf(c), bill.id, input.body, c.get("me"), actor(c), bill.description);
+    pushInBackground(c, (_p, who) => ({ kind: "comment", who, description: bill.description, text: input.body })); // v0.12 (#7)
     return c.json({ comment }, 201);
   });
 
@@ -120,8 +122,8 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     if (toMembers.length + missing.length > 50) return { error: apiError(c, 409, "conflict", "target would exceed 50 members") };
     // Added people get no email: moving a bill must not hand someone access to the whole target trip.
     const added = await social.addMembersFor(c.env.DB, to.id, missing, actor(c));
-    for (const [k, v] of added) map.set(k, v);
-    return { map, added: missing.map((m) => m.name) };
+    for (const [k, v] of added.map) map.set(k, v);
+    return { map, stmts: added.stmts, added: missing.map((m) => m.name) };
   }
 
   g.post("/bills/:bid/move", async (c) => {
@@ -134,7 +136,7 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     if (to.archived) return apiError(c, 409, "archived", "target group is archived");
     const r = await prepareMove(c, from, to, [bill], addMissingMembers);
     if ("error" in r) return r.error;
-    await social.moveBills(c.env.DB, from, to, [bill], r.map, actor(c));
+    await c.env.DB.batch([...r.stmts, ...social.moveBillStatements(c.env.DB, from, to, [bill], r.map, actor(c))]);
     return c.json({ bill: await db.getBill(c.env.DB, to.id, bill.id), targetGroupId: to.id, addedMembers: r.added });
   });
 
@@ -148,12 +150,14 @@ export function registerSocial(api: Hono<AppEnv>, g: Hono<GroupEnv>, { apiError,
     if ((await db.countRows(c.env.DB, "bills", to.id)) + bills.length > 5000) return apiError(c, 409, "conflict", "would exceed 5000 bills");
     const r = await prepareMove(c, from, to, bills, addMissingMembers);
     if ("error" in r) return r.error;
-    await social.moveBills(c.env.DB, from, to, bills, r.map, actor(c));
-    // Stop the source's repeating bills (their templates point at the old members) and archive it.
-    await c.env.DB.prepare("UPDATE recurrences SET active = 0, last_error = 'group merged' WHERE group_id = ? AND active = 1").bind(from.id).run();
-    await db.updateGroup(c.env.DB, from.id, { archived: true }, actor(c), from);
-    // entity null: the source's id is its edit secret and must not be readable from the target's activity.
-    await db.logActivity(c.env.DB, to.id, actor(c), "group.merge", null, { from: from.name, bills: bills.length }).run();
+    // One batch = one transaction (v0.12): people added, bills moved, source stopped + archived, or nothing at all.
+    await c.env.DB.batch([
+      ...r.stmts,
+      ...social.mergeStatements(c.env.DB, from, to, r.map, actor(c)),
+      ...db.archiveStatements(c.env.DB, from, actor(c)),
+      // entity null: the source's id is its edit secret and must not be readable from the target's activity.
+      db.logActivity(c.env.DB, to.id, actor(c), "group.merge", null, { from: from.name, bills: bills.length }),
+    ]);
     return c.json({ moved: bills.length, addedMembers: r.added, sourceArchived: true });
   });
 }

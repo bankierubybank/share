@@ -5,6 +5,9 @@ Status (2026-10-30): **`ci` is live** — it runs on every push to `main` and ev
 step (nothing is deployed; it shows as skipped when `ci` was cancelled). Until step 3 below is done, `npm run ship`
 stays the way to release.
 
+Actions are pinned by commit SHA (version in a comment); `.github/dependabot.yml` opens weekly update PRs (Actions,
+and npm minor/patch grouped). They run `ci` only — no secrets — and merge only by hand.
+
 ## What runs
 
 | Workflow | Trigger | Does | Secrets |

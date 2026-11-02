@@ -1,11 +1,11 @@
 # Progress
 
-_Last updated: 2026-10-30_
+_Last updated: 2026-11-02_
 
-## Status: v0.11.2 (push topic fix) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 8f5cfff3)
+## Status: v0.12.0 (favourites, leave trip, multi-scan, home search) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 1577d070)
 
-Local 2026-10-30 (0.11.2): unit 207, integration 209, system 36, security 118 (+2 prod-only), E2E 362 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green.
-Prod 2026-10-30 (8f5cfff3): system 36, security 112 (+8 local-only), E2E 168 (+14 local-only; Chromium + iPhone), rate limit 1 — green. Prompt lab (scripts/scan-lab): 25/25 on 5 sample receipts (0.11.1).
+Local 2026-10-30 (0.12.0): unit 207, integration 218, system 36, security 122 (+2 prod-only), E2E 378 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green after targeted reruns of environmental timeouts (ISSUES #61).
+Prod 2026-10-30 (1577d070): system 36, security 115 (+9 local-only), E2E 172 (+18 local-only; Chromium + iPhone), rate limit 1 — green. (First 0.12 deploy f8080456 failed one prod E2E: ISSUES #60, fixed forward.)
 
 | Area | State |
 |------|-------|
@@ -147,9 +147,25 @@ Prod 2026-10-30 (8f5cfff3): system 36, security 112 (+8 local-only), E2E 168 (+1
 | 12 | Trip categories | ✅ ≤ 20 per trip, 24 icons |
 | 13 | Accessibility pass | ✅ 10 more axe checks × 4 browsers; Download link fixed |
 
+## v0.12 status (backlog picks, round 7)
+
+| # | Item | State |
+|---|------|-------|
+| 4 | Favourite bills | ✅ per trip, ≤ 30, one tap → new bill; stale ones greyed |
+| 6 | Leave trip | ✅ not while unsettled or last linked |
+| 7 | More push notices | ✅ comments, "added you", "paid you" |
+| 10 | Several receipts at once | ✅ up to 10, read in turn (waits on the scan limit), reviewed one by one |
+| 12 | Home search / sort / pin | ✅ 5+ trips; remembered per browser |
+| 21 | Actions pinned by SHA + Dependabot | ✅ |
+| 22 | Prune predeploy backups + activity retention | ✅ 30 days (newest 3 kept) / 2 years |
+| 23 | Atomic merge | ✅ one batch, independent of the bill count |
+| 24 | Split group.ts | ✅ 1630 → 1365 lines; settings lazy |
+
 ## Next ideas (backlog)
-- Not picked yet: live FX rates, bill templates, import Splitwise/KittySplit CSV, leave trip, hide search/filters
-  on short trips, staging env, error tracking/uptime, restore drill, Durable Object per trip.
-- Open tech debt: ISSUES #52 (0.10 review leftovers).
+- Not picked yet: live FX rates, trip kitty (shared cash pot), copy trip, import Splitwise/KittySplit CSV, weekly
+  "you owe" push, quick text entry (AI), hide search/filters on short trips, "received" confirmation, bill-dialog
+  suggestions, undo for more actions, join-flow tips, error alerts + uptime, restore drill, test-token-only rate
+  limit exemption, clear offline copy on sign-out, staging env, Durable Object per trip.
+- Open tech debt: ISSUES #52 (what's left of the 0.10 review).
 - If writes are still slow after 0.5: D1 read replication (Sessions API) only helps reads; next step would be a
   Durable Object per trip (writes local to the object).

@@ -3,6 +3,7 @@ import type { Share } from "./lib/money";
 import { entityId, groupId } from "./lib/ids";
 import { versionStatement } from "./db-overview";
 import { categoriesStatement, type CustomCategory } from "./db-v11";
+import { templatesStatement, type TemplateRow } from "./db-v12";
 
 export interface Group {
   id: string;
@@ -362,6 +363,15 @@ export async function updateMember(
   return after;
 }
 
+/** Unlink my identity from my person (v0.12 leave); the person, their bills and name stay. */
+export async function leaveTrip(db: D1Database, gid: string, mid: string, actor: string | null) {
+  await db.batch([
+    db.prepare("UPDATE members SET email = NULL, seen_at = NULL WHERE id = ? AND group_id = ?").bind(mid, gid),
+    db.prepare("INSERT INTO activity (id, group_id, actor, action, entity_id, detail) SELECT ?, ?, ?, 'member.leave', id, json_object('name', name) FROM members WHERE id = ? AND group_id = ?")
+      .bind(entityId(), gid, actor, mid, gid),
+  ]);
+}
+
 export async function getMember(db: D1Database, gid: string, mid: string): Promise<Member | null> {
   return db.prepare("SELECT id, name, promptpay, email FROM members WHERE id = ? AND group_id = ?").bind(mid, gid).first<Member>();
 }
@@ -496,6 +506,7 @@ export async function groupPage(db: D1Database, gid: string, activityLimit: numb
     db.prepare("SELECT invite_expires FROM groups WHERE id = ? AND invite_hash IS NOT NULL").bind(gid),
     versionStatement(db, gid),
     categoriesStatement(db, gid),
+    templatesStatement(db, gid),
   ]);
   const inv = (r[8].results as { invite_expires: string }[])[0];
   const inviteLive = !!inv && inv.invite_expires > new Date().toISOString();
@@ -509,6 +520,7 @@ export async function groupPage(db: D1Database, gid: string, activityLimit: numb
     deleted: new Set((r[6].results as { id: string }[]).map((x) => x.id)),
     subgroups: (r[7].results as { id: string; name: string; member_ids: string }[]).map((s) => ({ id: s.id, name: s.name, memberIds: JSON.parse(s.member_ids) as string[] })),
     categories: r[10].results as unknown as CustomCategory[],
+    templates: r[11].results as unknown as TemplateRow[],
   };
 }
 
@@ -628,11 +640,18 @@ export async function deletedBillIds(db: D1Database, gid: string): Promise<Set<s
 /** Removes soft-deleted bills older than `days`. Returns receipt keys to remove from R2. */
 export async function purgeDeleted(db: D1Database, days: number): Promise<string[]> {
   const cutoff = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${Math.floor(days)} days')`;
+  // One statement: a bill restored between a separate SELECT and DELETE can't lose its receipt (ISSUES #52).
   const { results } = await db
-    .prepare(`SELECT receipt_key FROM bills WHERE deleted_at IS NOT NULL AND deleted_at < ${cutoff} AND receipt_key IS NOT NULL`)
-    .all<{ receipt_key: string }>();
-  await db.prepare(`DELETE FROM bills WHERE deleted_at IS NOT NULL AND deleted_at < ${cutoff}`).run();
-  return results.map((r) => r.receipt_key);
+    .prepare(`DELETE FROM bills WHERE deleted_at IS NOT NULL AND deleted_at < ${cutoff} RETURNING receipt_key`)
+    .all<{ receipt_key: string | null }>();
+  return results.flatMap((r) => (r.receipt_key ? [r.receipt_key] : []));
+}
+
+/** Activity older than `days` (v0.12); ≤ `max` rows a run so the daily job stays short. Returns rows removed. */
+export async function pruneActivity(db: D1Database, days: number, max = 5000): Promise<number> {
+  const cutoff = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${Math.floor(days)} days')`;
+  const r = await db.prepare(`DELETE FROM activity WHERE rowid IN (SELECT rowid FROM activity WHERE at < ${cutoff} LIMIT ?)`).bind(max).run();
+  return r.meta.changes;
 }
 
 // ---------- receipts ----------
@@ -652,6 +671,15 @@ export async function receiptKey(db: D1Database, gid: string, bid: string): Prom
 }
 
 // ---------- activity ----------
+
+/** Archive a group (statements only, for a caller's batch): no-op + no activity if it already is. */
+export function archiveStatements(db: D1Database, g: Group, actor: string | null): D1PreparedStatement[] {
+  if (g.archived) return [];
+  return [
+    db.prepare(`UPDATE groups SET archived_at = COALESCE(archived_at, ${NOW}) WHERE id = ?`).bind(g.id),
+    logActivity(db, g.id, actor, "group.archive", g.id, null),
+  ];
+}
 
 export function logActivity(db: D1Database, gid: string, actor: string | null, action: string, ref: string | null, detail: unknown) {
   return db

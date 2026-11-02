@@ -1,4 +1,4 @@
-# API Contract (v8 — app 0.11.2)
+# API Contract (v9 — app 0.12.0)
 
 Base: same origin, prefix `/api`. JSON in/out. Money = **integer minor units** (cents). Dates = `YYYY-MM-DD` (UTC).
 Every response carries `Server-Timing: db;dur=<ms>;desc="<n> round trips", app;dur=<ms>` (0.5; diagnostics only).
@@ -14,7 +14,7 @@ Errors: `{ "error": { "code": string, "message": string } }`.
 | 403 | `not_member` (you're not linked to anyone in this trip) / `claim_required` (pre-0.4 trip, nobody linked yet) / `email_locked` (0.10) |
 | 404 | `not_found` / `push_off` (0.11, notifications not configured) |
 | 405 | `method_not_allowed` |
-| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` / `missing_members` (move/merge) / `others_linked` (0.10, delete forever) / `limit` (0.11, categories) / `stale` (0.11, `ifUpdatedAt`) |
+| 409 | `conflict` (limits, duplicates, member in use) / `archived` (write to archived group) / `last_link` / `missing_members` (move/merge) / `others_linked` (0.10, delete forever) / `limit` (0.11, categories; 0.12, favourites) / `stale` (0.11, `ifUpdatedAt`) / `unsettled` (0.12, leave; body has `net`) |
 | 410 | `trip_deleted` (0.10) — the trip is in the bin: every `/groups/:gid/**` route except `POST …/restore` and `DELETE /groups/:gid`; body has `deletedAt`. Non-members get `404` |
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
@@ -126,6 +126,10 @@ Both join routes share the stricter link rate limit. Activity: `invite.create`, 
 | PATCH | `/api/groups/:gid/categories/:cid` | `{ name, icon }` | (0.11) `{ category }` |
 | DELETE | `/api/groups/:gid/categories/:cid` | – | (0.11) `204`; bills keep `c:<id>` (shown as Other) |
 | POST | `/api/groups/:gid/scan` | raw JPEG/PNG/WebP ≤ 2 MB | (0.11) `{ scan: { description?, amount?, date?, category?, fx?: { currency, amount }, items?: [{ description, amount }], serviceBp?, taxBp? } }` (0.11.1: items only when they rebuild the total) — suggestions only; 429 after 10/min; 502 `scan_failed` |
+| GET | `/api/groups/:gid/templates` | – | (0.12) `{ templates: [{ id, name, bill }] }` favourite bills, oldest first; `bill` = the bill as it would be saved without a date (`{ kind, description, amount, payers, paidBy, category, splitMode, split, fx }`), or `null` when it no longer fits the trip (a person or category in it was removed); `/full` returns them as `templates` |
+| POST | `/api/groups/:gid/templates` | `{ name: 1–40, bill: BillBody (date ignored) }` | (0.12) `201 { template }`; validated like a bill; name unique per trip (409); ≤ 30 per trip (409 `limit`) |
+| DELETE | `/api/groups/:gid/templates/:tid` | – | (0.12) `204` |
+| POST | `/api/groups/:gid/leave` | `{}` | (0.12) `204` — unlinks the caller from their person (the person, name and bills stay); `409 last_link` if nobody else is linked; `409 unsettled { net }` if the caller's balance isn't 0; allowed while archived. Activity `member.leave { name }` |
 | GET | `/api/me/contacts` | – | (0.11) `{ contacts: [{ email, name }] }` people linked in my live trips (not me, not service tokens) |
 | GET | `/api/push/key` | – | (0.11) `{ publicKey }` VAPID public key; 404 `push_off` when not configured |
 | POST | `/api/me/push` | `{ endpoint, keys: { p256dh, auth }, lang? }` | (0.11) `201`; endpoint must be a browser push service (FCM, Mozilla, Apple, WNS); ≤ 10 devices per identity (oldest dropped) |
@@ -175,7 +179,8 @@ Bill.commentCount: number
 Move/merge rules: members matched **by name, case-insensitive**; same currency required (400); target archived → 409;
 missing names → `409 { error: { code: "missing_members", missing: string[] } }` unless `addMissingMembers`.
 Moved bills keep id, payers, shares, split (remapped), comments (author link dropped); `recurrenceId` cleared.
-Merge moves all live bills from source → this group, stops the source's repeating bills, archives the source.
+Merge moves all live bills from source → this group, stops the source's repeating bills, archives the source —
+(0.12) all in one transaction: on any failure nothing changed.
 Soft-deleted bills stay in the source.
 
 Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|moveIn`, `group.merge`.
@@ -183,7 +188,7 @@ Activity actions added: `comment.add`, `viewlink.create|revoke`, `bill.moveOut|m
 **Archived groups** are read-only: any write except `PATCH /groups/:gid` with `archived:false` (or delete group) → `409 archived`.
 
 Activity actions: `group.create|rename|currency|archive|unarchive|budget|dates|delete|restore`, `member.add|rename|promptpay|email|link|remove|join`,
-`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`, `invite.create|revoke`, `category.add` (0.11), `category.update|remove` (0.11.2; `{ name }`).
+`bill.create|update|delete|restore|recurring`, `receipt.add|remove`, `recurring.create|stop`, `invite.create|revoke`, `category.add` (0.11), `category.update|remove` (0.11.2; `{ name }`), `member.leave` (0.12).
 
 ## Scheduled (daily 00:17 UTC)
 1. Backup all tables → R2 `share-backups/backups/YYYY-MM-DD.json.gz` (keep 30 days). Restore: `scripts/restore-backup.mjs`.
@@ -191,6 +196,13 @@ Activity actions: `group.create|rename|currency|archive|unarchive|budget|dates|d
    or the group at 5000 bills → deactivated with `lastError`.
 3. Purge bills soft-deleted > 30 days (and their receipts).
 4. (0.10) Remove trips in the bin > 30 days, with their receipts.
+5. (0.12) Remove activity older than 2 years (≤ 5000 rows a run). Step 1 also prunes `predeploy/` exports
+   (deploy.yml) older than 30 days, always keeping the newest 3.
+
+### Push notices (0.11, 0.12)
+Sent after the response to everyone else linked to the trip who turned notifications on: a new bill or payment
+(a payment to you reads "… paid you …"), a comment (0.12). When someone puts a sign-in email on a person (add or
+change), only that identity is told "… added you to this trip" (0.12; not when it's your own).
 
 ### Settlement algorithm
 Greedy: sort creditors and debtors by |net| desc (tie → member id), match largest debtor with

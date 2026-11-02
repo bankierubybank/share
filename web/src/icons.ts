@@ -46,6 +46,7 @@ import i_local_bar from "@material-symbols/svg-400/outlined/local_bar.svg?raw";
 import i_local_cafe from "@material-symbols/svg-400/outlined/local_cafe.svg?raw";
 import i_local_gas_station from "@material-symbols/svg-400/outlined/local_gas_station.svg?raw";
 import i_lock from "@material-symbols/svg-400/outlined/lock.svg?raw";
+import i_logout from "@material-symbols/svg-400/outlined/logout.svg?raw";
 import i_medical_services from "@material-symbols/svg-400/outlined/medical_services.svg?raw";
 import i_more_vert from "@material-symbols/svg-400/outlined/more_vert.svg?raw";
 import i_notifications from "@material-symbols/svg-400/outlined/notifications.svg?raw";
@@ -75,6 +76,8 @@ import i_shopping_bag from "@material-symbols/svg-400/outlined/shopping_bag.svg?
 import i_shopping_cart from "@material-symbols/svg-400/outlined/shopping_cart.svg?raw";
 import i_spa from "@material-symbols/svg-400/outlined/spa.svg?raw";
 import i_sports_soccer from "@material-symbols/svg-400/outlined/sports_soccer.svg?raw";
+import i_star from "@material-symbols/svg-400/outlined/star.svg?raw";
+import i_star_fill from "@material-symbols/svg-400/outlined/star-fill.svg?raw";
 import i_table_view from "@material-symbols/svg-400/outlined/table_view.svg?raw";
 import i_train from "@material-symbols/svg-400/outlined/train.svg?raw";
 import i_translate from "@material-symbols/svg-400/outlined/translate.svg?raw";
@@ -127,6 +130,7 @@ export const ICONS = {
   local_cafe: i_local_cafe,
   local_gas_station: i_local_gas_station,
   lock: i_lock,
+  logout: i_logout,
   medical_services: i_medical_services,
   more_vert: i_more_vert,
   notifications: i_notifications,
@@ -156,6 +160,8 @@ export const ICONS = {
   shopping_cart: i_shopping_cart,
   spa: i_spa,
   sports_soccer: i_sports_soccer,
+  star: i_star,
+  star_fill: i_star_fill,
   table_view: i_table_view,
   train: i_train,
   translate: i_translate,

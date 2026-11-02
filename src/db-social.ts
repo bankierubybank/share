@@ -122,10 +122,13 @@ export async function groupIdByViewId(db: D1Database, vid: string): Promise<stri
 
 // ---------- move / merge ----------
 
-/** Adds members (by name) to a group; returns their new ids keyed by the source member id. */
+/**
+ * Statements that add members (by name) to a group, and their new ids keyed by the source member id. Not run here:
+ * they go into the same batch as the move, so a failed move adds nobody (v0.12).
+ */
 export async function addMembersFor(db: D1Database, gid: string, missing: { id: string; name: string }[], actor: string | null) {
   const map = new Map<string, string>();
-  if (!missing.length) return map;
+  if (!missing.length) return { map, stmts: [] as D1PreparedStatement[] };
   const max = await db.prepare("SELECT COALESCE(MAX(position), -1) p FROM members WHERE group_id = ?").bind(gid).first<{ p: number }>();
   let pos = (max?.p ?? -1) + 1;
   const stmts = missing.flatMap((m) => {
@@ -136,33 +139,66 @@ export async function addMembersFor(db: D1Database, gid: string, missing: { id: 
       logActivity(db, gid, actor, "member.add", id, { name: m.name }),
     ];
   });
-  await db.batch(stmts);
-  return map;
+  return { map, stmts };
 }
 
-/** Moves live bills (with their payers, shares and comments) to another group, remapping member ids. */
-export async function moveBills(
+/** Statements that move one live bill (with its payers, shares and comments) to another group, remapping member ids. */
+export function moveBillStatements(
   db: D1Database, from: Group, to: Group, bills: Bill[], map: ReadonlyMap<string, string>, actor: string | null,
 ) {
   const m = (id: string) => map.get(id)!;
-  for (let i = 0; i < bills.length; i += 25) {
-    const stmts: D1PreparedStatement[] = [];
-    for (const b of bills.slice(i, i + 25)) {
-      stmts.push(
-        db.prepare("UPDATE bills SET group_id = ?, paid_by = ?, split_json = ?, recurrence_id = NULL WHERE id = ? AND group_id = ?")
-          .bind(to.id, m(b.payers[0].memberId), JSON.stringify(remapSplit(b.split, map)), b.id, from.id),
-        db.prepare("DELETE FROM bill_payers WHERE bill_id = ?").bind(b.id),
-        db.prepare("DELETE FROM bill_shares WHERE bill_id = ?").bind(b.id),
-        ...b.payers.map((p) => db.prepare("INSERT INTO bill_payers (bill_id, member_id, amount) VALUES (?, ?, ?)").bind(b.id, m(p.memberId), p.amount)),
-        ...b.shares.map((s) => db.prepare("INSERT INTO bill_shares (bill_id, member_id, amount) VALUES (?, ?, ?)").bind(b.id, m(s.memberId), s.amount)),
-        // Comment authors are members of the old group: keep the text, drop the link.
-        db.prepare("UPDATE bill_comments SET group_id = ?, author_member_id = NULL WHERE bill_id = ?").bind(to.id, b.id),
-        logActivity(db, from.id, actor, "bill.moveOut", b.id, { description: b.description, amount: b.amount, to: to.name }),
-        logActivity(db, to.id, actor, "bill.moveIn", b.id, { description: b.description, amount: b.amount, from: from.name }),
-      );
-    }
-    await db.batch(stmts);
+  const stmts: D1PreparedStatement[] = [];
+  for (const b of bills) {
+    stmts.push(
+      db.prepare("UPDATE bills SET group_id = ?, paid_by = ?, split_json = ?, recurrence_id = NULL WHERE id = ? AND group_id = ?")
+        .bind(to.id, m(b.payers[0].memberId), JSON.stringify(remapSplit(b.split, map)), b.id, from.id),
+      db.prepare("DELETE FROM bill_payers WHERE bill_id = ?").bind(b.id),
+      db.prepare("DELETE FROM bill_shares WHERE bill_id = ?").bind(b.id),
+      ...b.payers.map((p) => db.prepare("INSERT INTO bill_payers (bill_id, member_id, amount) VALUES (?, ?, ?)").bind(b.id, m(p.memberId), p.amount)),
+      ...b.shares.map((s) => db.prepare("INSERT INTO bill_shares (bill_id, member_id, amount) VALUES (?, ?, ?)").bind(b.id, m(s.memberId), s.amount)),
+      // Comment authors are members of the old group: keep the text, drop the link.
+      db.prepare("UPDATE bill_comments SET group_id = ?, author_member_id = NULL WHERE bill_id = ?").bind(to.id, b.id),
+      logActivity(db, from.id, actor, "bill.moveOut", b.id, { description: b.description, amount: b.amount, to: to.name }),
+      logActivity(db, to.id, actor, "bill.moveIn", b.id, { description: b.description, amount: b.amount, from: from.name }),
+    );
   }
+  return stmts;
+}
+
+/**
+ * Merge (v0.12): every live bill of `from` moves to `to` in set-based statements — their number depends on the people
+ * (≤ 4 per person), not the bills, so the whole merge fits one batch (one transaction: all or nothing). Member ids are
+ * 16-char random ids, so swapping `"<old>"` for `"<new>"` inside split_json touches only member references.
+ */
+export function mergeStatements(db: D1Database, from: Group, to: Group, map: ReadonlyMap<string, string>, actor: string | null) {
+  const live = "SELECT id FROM bills WHERE group_id = ?1 AND deleted_at IS NULL";
+  const act = (gid: string, action: string, key: string, name: string) =>
+    db.prepare(
+      `INSERT INTO activity (id, group_id, actor, action, entity_id, detail)
+       SELECT lower(hex(randomblob(8))), ?2, ?3, '${action}', id, json_object('description', description, 'amount', amount, '${key}', ?4)
+       FROM bills WHERE group_id = ?1 AND deleted_at IS NULL ORDER BY date, created_at`,
+    ).bind(from.id, gid, actor, name);
+  const stmts: D1PreparedStatement[] = [
+    act(from.id, "bill.moveOut", "to", to.name),
+    act(to.id, "bill.moveIn", "from", from.name),
+    // Comment authors are members of the old group: keep the text, drop the link.
+    db.prepare(`UPDATE bill_comments SET group_id = ?2, author_member_id = NULL WHERE bill_id IN (${live})`).bind(from.id, to.id),
+  ];
+  for (const [src, dst] of map) {
+    stmts.push(
+      db.prepare(`UPDATE bill_payers SET member_id = ?3 WHERE member_id = ?2 AND bill_id IN (${live})`).bind(from.id, src, dst),
+      db.prepare(`UPDATE bill_shares SET member_id = ?3 WHERE member_id = ?2 AND bill_id IN (${live})`).bind(from.id, src, dst),
+      db.prepare("UPDATE bills SET paid_by = ?3 WHERE paid_by = ?2 AND group_id = ?1 AND deleted_at IS NULL").bind(from.id, src, dst),
+      db.prepare("UPDATE bills SET split_json = replace(split_json, ?2, ?3) WHERE group_id = ?1 AND deleted_at IS NULL")
+        .bind(from.id, `"${src}"`, `"${dst}"`),
+    );
+  }
+  stmts.push(
+    db.prepare("UPDATE bills SET group_id = ?2, recurrence_id = NULL WHERE group_id = ?1 AND deleted_at IS NULL").bind(from.id, to.id),
+    // The source's repeating bills point at its old members: stop them.
+    db.prepare("UPDATE recurrences SET active = 0, last_error = 'group merged' WHERE group_id = ? AND active = 1").bind(from.id),
+  );
+  return stmts;
 }
 
 /** Member ids referenced by bills (payers + shares). */

@@ -1,7 +1,7 @@
 import { api, ApiError, type MyGroup, type Overview } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { CURRENCIES, defaultCurrency, formatMoney, rememberCurrency } from "../money";
-import { forgetGroup, recentGroups, type RecentGroup } from "../store";
+import { forgetGroup, pinnedTrips, recentGroups, setTripSort, togglePin, tripSort, type RecentGroup, type TripSort } from "../store";
 import { navigate } from "../router";
 import { themeButton } from "../theme";
 import { installButton } from "../pwa";
@@ -26,6 +26,9 @@ export function renderHome(root: HTMLElement) {
   detachPullToRefresh(); // the group view's pull-to-refresh must not fire here
   document.title = t("home.title");
   const members: string[] = [];
+  // Trip search (v0.12): kept outside the card, which is rebuilt when the server's list arrives — often while
+  // someone is already typing (seen on prod: the query was wiped).
+  let query = "";
 
   const nameField = h("md-outlined-text-field", {
     label: t("home.groupName"),
@@ -180,12 +183,46 @@ export function renderHome(root: HTMLElement) {
   /** "Your groups" card (or the empty-state card). Rebuilt on its own when the server list arrives, so the form
    *  next to it is never replaced while someone types. */
   const tripsCard = () => {
-    // Archived groups sink to the bottom.
-    const trips = mergeTrips(lastMine, recentGroups()).sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
-    const recentList = h(
-      "md-list",
-      { dataset: { testid: "recent-groups" } },
-      trips.map((g) =>
+    const trips = mergeTrips(lastMine, recentGroups());
+    // v0.12 (#12): search, sort and pins. Pinned first, archived last; the rest in the chosen order.
+    const opened = new Map(recentGroups().map((g) => [g.id, g.openedAt]));
+    const net = (id: string) => Math.abs(lastOverview?.trips.find((x) => x.groupId === id)?.net ?? 0);
+    let sort: TripSort = tripSort();
+    const ordered = () => {
+      const pins = pinnedTrips();
+      const q = query.trim().toLocaleLowerCase(locale());
+      const rank = (g: Trip) => (pins.has(g.id) ? 0 : g.archived ? 2 : 1);
+      const key = (a: Trip, b: Trip) =>
+        sort === "name" ? a.name.localeCompare(b.name, locale())
+        : sort === "balance" ? net(b.id) - net(a.id)
+        : (opened.get(b.id) ?? 0) - (opened.get(a.id) ?? 0);
+      return trips
+        .map((g, i) => ({ g, i }))
+        .filter(({ g }) => !q || g.name.toLocaleLowerCase(locale()).includes(q) || (g.memberName ?? "").toLocaleLowerCase(locale()).includes(q))
+        .sort((a, b) => rank(a.g) - rank(b.g) || key(a.g, b.g) || a.i - b.i)
+        .map(({ g }) => g);
+    };
+    const recentList = h("md-list", { dataset: { testid: "recent-groups" } });
+    const none = h("p", { class: "md-typescale-body-medium muted", hidden: true, dataset: { testid: "trip-search-none" } }, t("home.searchNone"));
+    const renderList = () => {
+      const list = ordered();
+      none.hidden = list.length > 0;
+      clear(recentList, ...list.map(row));
+    };
+    const pinButton = (g: Trip) => {
+      const on = pinnedTrips().has(g.id);
+      return h("md-icon-button", {
+        slot: "end", class: on ? "trip-pin on" : "trip-pin", dataset: { testid: "trip-pin", pinned: on ? "1" : "0" },
+        "aria-label": on ? t("home.unpin", { name: g.name }) : t("home.pin", { name: g.name }),
+        onclick: (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+          togglePin(g.id);
+          renderList();
+        },
+      }, icon(on ? "star_fill" : "star"));
+    };
+    const row = (g: Trip) =>
         h(
           "md-list-item",
           { type: "link", href: `/g/${g.id}`, dataset: { testid: g.local ? "trip-local" : lastMine ? "trip-mine" : "trip" }, onclick: (e: Event) => { e.preventDefault(); navigate(`/g/${g.id}`); } },
@@ -208,12 +245,23 @@ export function renderHome(root: HTMLElement) {
             },
             icon("close"),
           ),
-        ),
-      ),
-    );
+          pinButton(g),
+        );
+    renderList();
+
+    const search = h("md-outlined-text-field", {
+      type: "search", label: t("home.search"), class: "grow", value: query, dataset: { testid: "trip-search" },
+      oninput: (e: Event) => { query = (e.target as HTMLInputElement).value; renderList(); },
+    });
+    const sortSel = h("md-outlined-select", { quick: true, label: t("home.sort"), dataset: { testid: "trip-sort" },
+      onchange: (e: Event) => { sort = (e.target as HTMLInputElement).value as TripSort; setTripSort(sort); renderList(); } },
+      (["recent", "name", "balance"] as const).map((v) =>
+        h("md-select-option", { value: v, selected: v === sort }, h("div", { slot: "headline" }, t(`home.sort.${v}`)))));
+    // Controls only once the list is long enough to need them.
+    const controls = trips.length >= 5 && h("div", { class: "row wrap trip-controls" }, search, sortSel);
 
     return trips.length
-      ? h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, t("common.yourGroups")), recentList)
+      ? h("section", { class: "card" }, h("h2", { class: "md-typescale-title-medium" }, t("common.yourGroups")), controls, recentList, none)
       : h(
           "section",
           { class: "card tonal" },
@@ -337,7 +385,9 @@ export function renderHome(root: HTMLElement) {
     // Only while it's still on screen (not after navigating away).
     if (changed && card.isConnected) {
       const next = tripsCard();
+      const typing = !!document.activeElement?.closest("[data-testid=trip-search]");
       card.replaceWith(next);
+      if (typing) next.querySelector<HTMLElement>("[data-testid=trip-search]")?.focus();
       card = next;
       const nextSpend = spendingCard();
       spend.replaceWith(nextSpend);

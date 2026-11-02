@@ -17,7 +17,7 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
    │                                      → browser push services (Web Push after a bill, 0.11; waitUntil)
    └── scheduled (daily 00:17 UTC) → backup D1 → R2 BACKUPS ("share-backups"),
                                     materialize recurring bills, purge 30-day-old soft deletes,
-                                    remove trips 30 days in the bin
+                                    remove trips 30 days in the bin, activity > 2 years (0.12)
                                     (independent steps: one failing doesn't skip the others)
 ```
 
@@ -31,6 +31,7 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 | `src/routes-invite.ts`, `src/db-invite.ts` | Invite links / join (0.6) |
 | `src/db-overview.ts` | Home overview: my position per trip + spending per month (0.8) |
 | `src/routes-v11.ts`, `src/db-v11.ts` | Trip categories, receipt scan, contacts, push subscriptions + `notifyTrip` (0.11) |
+| `src/routes-v12.ts`, `src/db-v12.ts` | Favourite bills (0.12); `templateView` re-validates each against the trip |
 | `src/lib/scan.ts` | Receipt scan: prompt, JSON schema, `normalizeScan` / `parseReceiptDate` (untrusted model output) |
 | `src/lib/webpush.ts` | Web Push: VAPID JWT (RFC 8292) + aes128gcm payload encryption (RFC 8291), WebCrypto only |
 | `src/lib/ratelimit.ts` | Which rate limits apply to a request and under which key |
@@ -49,7 +50,7 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
 | `src/lib/ids.ts` | Random ids (base64url, 128-bit for groups) |
 | `migrations/*.sql` | D1 schema migrations |
 | `web/` | Frontend source (Vite root). `main.ts` app, `api.ts` client, `money.ts` formatting, `icons.ts` (bundled SVG Material Symbols), `theme.ts`, `promptpay.ts` (QR), `export.ts` (CSV), `image.ts` (receipt downscale), `views/` |
-| `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts`, `join.ts` (invite links), `categories-dialog.ts` |
+| `web/src/views/` | `home.ts`, `group.ts` (also read-only `/v/` mode), `bill-dialog.ts`, `stats.ts`, `move.ts`, `join.ts` (invite links), `categories-dialog.ts`; (0.12) `group-settings.ts` (Settings dialog + delete / leave / merge, lazy), `group-activity.ts` (activity text), `scan-queue.ts` (several receipts, lazy) |
 | `web/src/` (others) | `i18n.ts` (TH/EN), `gestures.ts` (swipe/long-press/pull), `sample.ts` (onboarding), `categories.ts` (built-in + trip categories), `dialogs.ts`, `dom.ts` (`h()`), `router.ts`, `store.ts` (recent groups), `pwa.ts` (install), `offline.ts` (outbox + saved page), `push.ts` (subscribe), `remind.ts` (settle-up reminder text), `summary-image.ts` (canvas PNG) |
 | `web/public/sw.js` | Service worker: precache, cache-first bundles, offline shell, push + notification click |
 | `web/public/theme.js` | Tiny blocking script: applies saved light/dark before first paint |
@@ -84,6 +85,8 @@ Worker "share"  (src/index.ts, Hono)    run_worker_first = ["/api/*"], placement
   (the token itself is never stored), expiry 14 days after creation
 - `categories(id PK, group_id FK, name, icon, created_at)` (0008) unique `(group_id, lower(name))`, ≤ 20 per trip;
   bills point to one as `category = 'c:<id>'` (no FK: a deleted category shows as Other)
+- `bill_templates(id PK, group_id FK, name, template JSON, created_at)` (0009) unique `(group_id, lower(name))`, ≤ 30
+  per trip: favourite bills; `template` = bill body without a date, re-validated whenever listed
 - `push_subscriptions(endpoint PK, identity, p256dh, auth, lang, created_at)` (0008): per device, ≤ 10 per identity;
   not trip-scoped (an identity's devices get notices from every trip it's linked to)
 
@@ -151,6 +154,19 @@ batches far more (ISSUES #28). Rules:
   saved copy with an offline banner; the next tick replaces it with the server's answer.
 - The bill dialog chunk is prefetched shortly after the trip page renders, so Add works if the connection drops
   before the first Add even without the service worker.
+
+## v0.12 additions
+
+- **Merge = one batch** (`mergeStatements`, `src/db-social.ts`): set-based statements per mapped person
+  (`UPDATE bill_payers / bill_shares / bills.paid_by … WHERE member_id = old`, `split_json = replace(split_json,
+  '"old"', '"new"')` — member ids are 16-char random ids, so only references match), activity via `INSERT … SELECT`,
+  people added + source archived in the same batch. Statement count ≈ 4 × people + 8, independent of bills.
+- **Leave** (`POST …/leave`): `members.email = NULL, seen_at = NULL` for me; guarded by "someone else linked" and
+  "my net = 0" (same `summaryOf` as the Summary tab).
+- **Push** (`pushInBackground` in `src/routes-v11.ts`): one helper for every notice (bill, comment, "added you");
+  `only` = one identity's browsers. Topic = hash of the trip id (0.11.2).
+- **Retention**: `pruneActivity` (2 years), `pruneBackups` also handles `predeploy/` (30 days, newest 3 kept).
+- **Home prefs** (`web/src/store.ts`): pins + sort in localStorage (`share.pins`, `share.tripSort`) — conveniences only.
 
 ## v0.11 additions
 

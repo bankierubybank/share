@@ -10,10 +10,10 @@ import "@material/web/progress/circular-progress.js";
 import "@material/web/tabs/tabs.js";
 import "@material/web/tabs/primary-tab.js";
 
-import { api, ApiError, type Activity, type Bill, type BillCategory, type Contact, type CustomCategory, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
+import { api, ApiError, type Activity, type Bill, type BillCategory, type BillTemplate, type Contact, type CustomCategory, type Group, type InviteStatus, type Member, type Recurrence, type Subgroup, type Summary } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
 import { confirmDialog, openDialog, type MdDialog } from "../dialogs";
-import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
+import { formatMoney } from "../money";
 import { CATEGORY_ORDER, categoryInfo } from "../categories";
 import { forgetGroup, rememberGroup } from "../store";
 import { dispatch, navigate } from "../router";
@@ -21,6 +21,7 @@ import { lang, locale, setLang, t, tn } from "../i18n";
 import { attachPullToRefresh, attachRowGestures } from "../gestures";
 import { summarize } from "../../../src/lib/summary";
 import type { PendingSave } from "./bill-dialog";
+import { describeActivity } from "./group-activity";
 import { dequeue, enqueue, loadPage, queued, savePage } from "../offline";
 
 const cmpDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
@@ -29,7 +30,6 @@ const cmpDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 const loadBillDialog = () => import("./bill-dialog");
 const loadExport = () => import("../export");
 const loadStats = () => import("./stats");
-const loadMove = () => import("./move");
 const loadRemind = () => import("../remind");
 const loadImage = () => import("../summary-image");
 type PageData = Awaited<ReturnType<typeof api.groupPage>>;
@@ -39,7 +39,7 @@ type Tab = "bills" | "summary" | "members" | "activity";
 const TABS: Tab[] = ["bills", "summary", "members", "activity"];
 type Field = HTMLElement & { value: string; error: boolean; errorText: string; focus(): void };
 
-interface State {
+export interface State {
   group: Group;
   members: Member[];
   bills: Bill[];
@@ -55,6 +55,8 @@ interface State {
   me: string | null;
   /** The trip's own categories (v0.11). */
   categories: CustomCategory[];
+  /** Favourite bills (v0.12); absent in pages saved offline by older versions. */
+  templates?: BillTemplate[];
 }
 
 /** mode "view": `gid` is a read-only view id (/v/:id); nothing can be edited and the group id is unknown. */
@@ -96,7 +98,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
           group: { ...v.group, id: "" },
           members: v.members.map((m) => ({ ...m, promptpay: null, email: null })),
           bills: v.bills.map((b) => ({ ...b, createdBy: null, hasReceipt: false, recurrenceId: null })),
-          summary: v.summary, recurring: [], activity: [], subgroups: [], me: null, categories: v.categories ?? [],
+          summary: v.summary, recurring: [], activity: [], subgroups: [], me: null, categories: v.categories ?? [], templates: [],
         };
       } else {
         let p: PageData;
@@ -259,6 +261,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       item(t("menu.exportCsv"), "table_view", "export-csv", exportCsv),
       item(t("menu.print"), "print", "export-print", printPdf),
       item(t("menu.image"), "image", "export-image", () => void summaryImage()),
+      !isView && !readOnly() && item(t("scanq.menu"), "document_scanner", "scan-many", () => void scanMany()),
       item(t("keys.menu"), "keyboard", "shortcuts-help", () => void shortcutsHelp()),
       item(t("menu.themeChange", { label: themeLabel[currentTheme()] }), currentTheme() === "dark" ? "dark_mode" : currentTheme() === "light" ? "light_mode" : "contrast", "theme-toggle",
         () => { setTheme(next[currentTheme()]); snackbar(themeLabel[currentTheme()]); }),
@@ -271,163 +274,10 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     return [btn, menu];
   }
 
+  // ---------- settings (lazy: views/group-settings.ts) ----------
+  const settings = async () => (await import("./group-settings")).settings({ gid, state: () => state, isView, refresh });
   async function editGroup() {
-    const name = h("md-outlined-text-field", { label: t("home.groupName"), value: state.group.name, maxLength: 60, dataset: { testid: "edit-group-name" } }) as Field;
-    const cur = h("md-outlined-select", { quick: true, label: t("home.currency"), dataset: { testid: "edit-group-currency" } },
-      CURRENCIES.map((c) => h("md-select-option", { value: c, selected: c === state.group.currency }, h("div", { slot: "headline" }, c)))) as HTMLElement & { value: string };
-    const budget = h("md-outlined-text-field", {
-      label: t("budget.field"), inputMode: "decimal", suffixText: state.group.currency, dataset: { testid: "edit-group-budget" },
-      value: state.group.budget ? toInput(state.group.budget, state.group.currency) : "", supportingText: t("budget.help"),
-    }) as Field & { suffixText: string };
-    // Untouched, the budget keeps its stored minor units on a currency switch — like every bill does (amounts aren't
-    // converted) — so show it in the newly picked currency. Typed by hand, it's read in that currency.
-    let budgetTouched = false;
-    budget.addEventListener("input", () => { budgetTouched = true; budget.error = false; });
-    cur.addEventListener("change", () => {
-      budget.suffixText = cur.value;
-      if (!budgetTouched) budget.value = state.group.budget ? toInput(state.group.budget, cur.value) : "";
-    });
-    const startF = h("md-outlined-text-field", { label: t("dates.start"), type: "date", value: state.group.startDate ?? "", dataset: { testid: "edit-group-start" } }) as Field;
-    const endF = h("md-outlined-text-field", { label: t("dates.end"), type: "date", value: state.group.endDate ?? "", dataset: { testid: "edit-group-end" } }) as Field;
-    const err = h("div", { class: "form-error", role: "alert" });
-    const archived = state.group.archived;
-    const d = h("md-dialog", { dataset: { testid: "settings-dialog" } },
-      h("div", { slot: "headline" }, t("menu.settings")),
-      h("div", { slot: "content", class: "stack" },
-        !archived && name, !archived && cur, !archived && budget,
-        !archived && h("div", { class: "row wrap" }, h("div", { class: "grow" }, startF), h("div", { class: "grow" }, endF)),
-        !archived && h("p", { class: "md-typescale-body-small muted" }, t("settings.currencyNote")),
-        await viewLinkSection(),
-        !archived && h("div", { class: "stack-sm", dataset: { testid: "settings-categories" } },
-          h("h2", { class: "md-typescale-title-small" }, t("cat.title")),
-          h("p", { class: "md-typescale-body-small muted" }, t("cat.help")),
-          h("md-chip-set", { "aria-label": t("cat.title") },
-            state.categories.map((c) => {
-              const info = categoryInfo(`c:${c.id}`, state.categories);
-              return h("md-assist-chip", { label: info.label, dataset: { testid: "settings-cat" }, onclick: () => { d.close("cancel"); void editCategory(c); } }, icon(info.icon, "icon"));
-            }),
-            h("md-assist-chip", { label: t("cat.new"), dataset: { testid: "settings-cat-new" }, onclick: () => { d.close("cancel"); void editCategory(); } }, icon("add", "icon")))),
-        await pushSection(),
-        !archived && h("div", { class: "stack-sm" },
-          h("h2", { class: "md-typescale-title-small" }, t("settings.merge")),
-          h("md-outlined-button", { dataset: { testid: "merge-group" }, onclick: () => { d.close("cancel"); void mergeFlow(); } },
-            icon("groups", "icon"), t("settings.mergeBtn"))),
-        h("div", { class: "danger-zone stack-sm" },
-          h("h2", { class: "md-typescale-title-small" }, archived ? t("settings.archivedTitle") : t("settings.finished")),
-          h("p", { class: "md-typescale-body-small muted" }, archived ? t("settings.archivedHelp") : t("settings.archiveHelp")),
-          h("div", { class: "row wrap" },
-            h("md-outlined-button", { dataset: { testid: archived ? "unarchive-group" : "archive-group" }, onclick: async () => {
-              try {
-                await api.updateGroup(gid, { archived: !archived });
-                snackbar(archived ? t("settings.unarchivedToast") : t("settings.archivedToast"));
-                d.close("ok");
-              } catch (e) {
-                err.textContent = e instanceof Error ? e.message : t("common.updateFailed");
-              }
-            } }, icon(archived ? "unarchive" : "archive", "icon"), archived ? t("settings.unarchive") : t("settings.archive")),
-            h("md-text-button", { class: "danger", dataset: { testid: "delete-group" }, onclick: async () => { d.close("cancel"); await deleteGroupFlow(); } },
-              icon("delete_forever", "icon"), t("settings.deleteGroup")))),
-        err),
-      h("div", { slot: "actions" },
-        h("md-text-button", { onclick: () => d.close("cancel") }, archived ? t("common.close") : t("common.cancel")),
-        !archived && h("md-filled-button", { dataset: { testid: "edit-group-save" }, onclick: async () => {
-          const raw = budget.value.trim();
-          const b = !budgetTouched ? state.group.budget : raw ? parseMoney(raw, cur.value) : null;
-          if (budgetTouched && raw && !(b && b > 0)) {
-            budget.error = true;
-            budget.errorText = t("budget.invalid");
-            return;
-          }
-          const startDate = startF.value || null;
-          const endDate = endF.value || null;
-          if (startDate && endDate && endDate < startDate) {
-            endF.error = true;
-            endF.errorText = t("dates.order");
-            return;
-          }
-          try {
-            await api.updateGroup(gid, {
-              name: name.value, currency: cur.value, ...(b !== state.group.budget ? { budget: b } : {}),
-              ...(startDate !== state.group.startDate ? { startDate } : {}), ...(endDate !== state.group.endDate ? { endDate } : {}),
-            });
-            d.close("ok");
-          } catch (e) {
-            err.textContent = e instanceof Error ? e.message : t("common.saveFailed");
-          }
-        } }, t("common.save"))),
-    ) as MdDialog;
-    if ((await openDialog(d)) === "ok") refresh();
-  }
-
-  async function editCategory(c?: CustomCategory) {
-    const { editCategoryDialog } = await import("./categories-dialog");
-    const saved = await editCategoryDialog(gid, c, c ? async () => {
-      await api.deleteCategory(gid, c.id);
-      snackbar(t("cat.deleted", { name: c.name }));
-    } : undefined);
-    if (saved || c) refresh();
-  }
-
-  /** Notifications on/off for this browser (v0.11, #6). */
-  async function pushSection() {
-    if (isView) return null;
-    const mod = await import("../push");
-    const on = !!(await mod.currentSubscription().catch(() => null));
-    const help = h("p", { class: "md-typescale-body-small muted" }, mod.pushSupported() ? t("push.help") : t("push.unsupported"));
-    const btn = h("md-outlined-button", { dataset: { testid: "push-toggle" }, disabled: !mod.pushSupported(), onclick: async () => {
-      try {
-        if (on) {
-          await mod.disablePush();
-          snackbar(t("push.off"));
-        } else {
-          const r = await mod.enablePush();
-          snackbar(r === "on" ? t("push.on") : r === "denied" ? t("push.denied") : t("push.unsupported"));
-        }
-      } catch (e) {
-        snackbar(e instanceof Error ? e.message : t("common.saveFailed"));
-      }
-      editGroupAgain();
-    } }, icon(on ? "notifications_off" : "notifications", "icon"), on ? t("push.turnOff") : t("push.turnOn"));
-    return h("div", { class: "stack-sm" }, h("h2", { class: "md-typescale-title-small" }, t("push.title")), help, btn);
-  }
-  /** Re-open Settings so the notifications button shows its new state. */
-  const editGroupAgain = () => {
-    document.querySelector<MdDialog>("md-dialog[data-testid=settings-dialog]")?.close("cancel");
-    setTimeout(() => void editGroup(), 0);
-  };
-
-  async function deleteGroupFlow() {
-    const field = h("md-outlined-text-field", { label: t("delete.confirmLabel"), dataset: { testid: "delete-confirm-input" } }) as Field;
-    const btn = h("md-filled-button", { class: "danger-filled", disabled: true, dataset: { testid: "delete-confirm" } }, t("delete.forever")) as HTMLElement & { disabled: boolean };
-    field.addEventListener("input", () => (btn.disabled = field.value.trim() !== state.group.name));
-    const d = h("md-dialog", { type: "alert", dataset: { testid: "delete-dialog" } },
-      h("div", { slot: "headline" }, t("delete.title", { name: state.group.name })),
-      h("div", { slot: "content", class: "stack" },
-        h("p", { class: "md-typescale-body-medium" }, t("delete.text")),
-        field),
-      h("div", { slot: "actions" }, h("md-text-button", { onclick: () => d.close("cancel") }, t("common.cancel")), btn)) as MdDialog;
-    btn.addEventListener("click", async () => {
-      try {
-        await api.deleteGroup(gid);
-        d.close("ok");
-      } catch (e) {
-        snackbar(e instanceof Error ? e.message : t("common.deleteFailed"));
-      }
-    });
-    if ((await openDialog(d)) === "ok") {
-      forgetGroup(gid);
-      navigate("/", true);
-      const name = state.group.name;
-      snackbar(t("delete.done"), { label: t("common.undo"), run: async () => {
-        try {
-          await api.restoreGroup(gid);
-          snackbar(t("bin.restored", { name }));
-          navigate(`/g/${gid}`);
-        } catch (e) {
-          snackbar(e instanceof Error ? e.message : t("common.restoreFailed"));
-        }
-      } });
-    }
+    (await settings()).editGroup();
   }
 
   // ---------- optimistic saves (#13) ----------
@@ -544,6 +394,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   const billOpts = () => ({
     group: state.group, members: state.members, bills: state.bills, viewAs, subgroups: state.subgroups, categories: state.categories,
     onDeleted: undoable, onDuplicate: (b: Bill) => void duplicateBill(b), onSaving: track,
+    templates: state.templates ?? [], onTemplate: (f: BillTemplate) => void fromTemplate(f), onTemplatesChanged: () => void refresh(),
   });
   const openBillDialog = async (o: Parameters<Awaited<ReturnType<typeof loadBillDialog>>["openBillDialog"]>[0]) =>
     (await loadBillDialog()).openBillDialog(o);
@@ -551,6 +402,37 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   async function duplicateBill(b: Bill) {
     if (readOnly()) return;
     if (await openBillDialog({ ...billOpts(), template: b })) refresh();
+  }
+
+  /** A favourite picked in a new bill (v0.12, #4): a new bill from it, dated today. */
+  async function fromTemplate(f: BillTemplate) {
+    if (readOnly() || !f.bill) return;
+    const { templateBill } = await loadBillDialog();
+    if (await openBillDialog({ ...billOpts(), template: templateBill(f) })) refresh();
+  }
+
+  /** Several receipt photos at once (v0.12, #10): read in turn, then each reviewed in the bill dialog. */
+  async function scanMany() {
+    if (readOnly()) return snackbar(t("group.archivedToast"));
+    if (!state.members.length) return snackbar(t("group.addPeopleFirst"));
+    const input = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true, class: "visually-hidden",
+      "aria-label": t("scanq.choose"), dataset: { testid: "scanq-input" } }) as HTMLInputElement;
+    document.body.append(input);
+    const files = await new Promise<File[]>((done) => {
+      input.addEventListener("change", () => done([...(input.files ?? [])]), { once: true });
+      input.addEventListener("cancel", () => done([]), { once: true });
+      input.click();
+    });
+    input.remove();
+    if (!files.length || !stillHere()) return;
+    const { scanQueueDialog } = await import("./scan-queue");
+    // Saves are optimistic (the dialog hands the save over and resolves false): "added" = it handed one over.
+    const added = await scanQueueDialog(gid, state.group.currency, files, async (scan, image) => {
+      let saved = false;
+      await openBillDialog({ ...billOpts(), scanned: { scan, image }, onSaving: (op: PendingSave) => { saved = true; track(op); } });
+      return saved;
+    });
+    if (added) refresh();
   }
 
   /** Bills with a change waiting on this device (offline queue); refreshed by overlayPending. */
@@ -1137,53 +1019,6 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
   }
 
   // ---------- read-only link (#12) + merge (#10) ----------
-  async function viewLinkSection() {
-    const host = h("div", { class: "stack-sm", dataset: { testid: "view-link-section" } });
-    const paint = (vid: string | null) => {
-      const url = vid ? `${location.origin}/v/${vid}` : null;
-      clear(host,
-        h("h2", { class: "md-typescale-title-small" }, t("view.title")),
-        h("p", { class: "md-typescale-body-small muted" }, url
-          ? t("view.help")
-          : t("view.helpNone")),
-        url && h("div", { class: "link-box md-typescale-body-small", dataset: { testid: "view-link-url" } }, url),
-        h("div", { class: "row wrap" },
-          url && h("md-outlined-button", { dataset: { testid: "view-link-copy" }, onclick: async () => {
-            try { await navigator.clipboard.writeText(url); snackbar(t("view.copied")); } catch { snackbar(url); }
-          } }, icon("content_copy", "icon"), t("common.copy")),
-          !state.group.archived && h("md-text-button", { dataset: { testid: url ? "view-link-rotate" : "view-link-create" }, onclick: async () => {
-            paint((await api.createViewLink(gid)).viewId);
-            snackbar(url ? t("view.rotated") : t("view.created"));
-          } }, url ? t("view.new") : t("view.create")),
-          url && h("md-text-button", { class: "danger", dataset: { testid: "view-link-revoke" }, onclick: async () => {
-            await api.revokeViewLink(gid);
-            paint(null);
-            snackbar(t("view.off"));
-          } }, t("view.turnOff"))));
-    };
-    paint(null);
-    api.viewLink(gid).then((r) => paint(r.viewId)).catch(() => {});
-    return host;
-  }
-
-  async function mergeFlow() {
-    const { pickGroupDialog, withMissingMembers } = await loadMove();
-    const source = await pickGroupDialog(
-      t("merge.title"),
-      t("merge.help", { currency: state.group.currency }),
-      gid, state.group.currency);
-    if (!source) return;
-    if (!(await confirmDialog(t("merge.confirmTitle"), t("merge.confirmText"), t("settings.merge")))) return;
-    try {
-      const r = await withMissingMembers((add) => api.merge(gid, source, add));
-      if (!r) return;
-      snackbar(tn("merge.done", r.moved) + (r.addedMembers.length ? t("merge.added", { names: r.addedMembers.join(", ") }) : ""));
-      refresh();
-    } catch (e) {
-      snackbar(e instanceof Error ? e.message : t("merge.failed"));
-    }
-  }
-
   // ---------- first-visit tips (#17) ----------
   function tipsBanner() {
     if (readOnly() || local.get("share.tipsDismissed")) return null;
@@ -1310,52 +1145,7 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
       host);
   }
 
-  function describe(a: Activity): string {
-    const d = (a.detail ?? {}) as Record<string, unknown>;
-    const desc = typeof d.description === "string" ? `“${d.description}”` : "";
-    const amt = typeof d.amount === "number" ? ` ${money(d.amount)}` : "";
-    const nm = (k: string) => (typeof d[k] === "string" ? String(d[k]) : "");
-    const dd = { desc, amt };
-    switch (a.action) {
-      case "group.create": return t("act.groupCreate");
-      case "group.rename": return t("act.groupRename", { to: nm("to") });
-      case "group.currency": return t("act.groupCurrency", { from: nm("from"), to: nm("to") });
-      case "group.archive": return t("act.groupArchive");
-      case "group.dates": return t("act.groupDates");
-      case "category.add": return t("act.categoryAdd", { name: nm("name") });
-      case "category.update": return t("act.categoryUpdate", { name: nm("name") });
-      case "category.remove": return t("act.categoryRemove", { name: nm("name") });
-      case "group.delete": return t("act.groupDelete");
-      case "group.restore": return t("act.groupRestore");
-      case "group.budget": return d.to ? t("act.groupBudget", { amount: money(Number(d.to)) }) : t("act.groupBudgetOff");
-      case "group.unarchive": return t("act.groupUnarchive");
-      case "member.add": return t("act.memberAdd", { name: nm("name") });
-      case "member.rename": return t("act.memberRename", { from: nm("from"), to: nm("to") });
-      case "member.promptpay": return t(d.set ? "act.promptpaySet" : "act.promptpayRemoved", { name: nm("name") });
-      case "member.remove": return t("act.memberRemove", { name: nm("name") });
-      case "member.email": return t(d.set ? "act.emailSet" : "act.emailRemoved", { name: nm("name") });
-      case "member.link": return t("act.memberLink", { name: nm("name") });
-      case "member.join": return t(d.added ? "act.memberJoinNew" : "act.memberJoin", { name: nm("name") });
-      case "invite.create": return t("act.inviteCreate");
-      case "invite.revoke": return t("act.inviteRevoke");
-      case "bill.create": return t(d.kind === "payment" ? "act.paymentCreate" : "act.billCreate", dd);
-      case "bill.update": return t("act.billUpdate", dd);
-      case "bill.delete": return t("act.billDelete", dd);
-      case "bill.restore": return t("act.billRestore", dd);
-      case "bill.recurring": return t("act.billRecurring", dd);
-      case "receipt.add": return t("act.receiptAdd", { desc });
-      case "receipt.remove": return t("act.receiptRemove", { desc });
-      case "recurring.create": return t(d.frequency === "weekly" ? "act.recurringWeekly" : "act.recurringMonthly", { desc });
-      case "recurring.stop": return t("act.recurringStop", { desc });
-      case "comment.add": return t("act.commentAdd", { desc, excerpt: nm("excerpt") });
-      case "viewlink.create": return t("act.viewCreate");
-      case "viewlink.revoke": return t("act.viewRevoke");
-      case "bill.moveOut": return t("act.moveOut", { ...dd, to: nm("to") });
-      case "bill.moveIn": return t("act.moveIn", { ...dd, from: nm("from") });
-      case "group.merge": return t("act.merge", { from: nm("from"), bills: String(d.bills ?? "") });
-      default: return a.action;
-    }
-  }
+  const describe = (a: Activity) => describeActivity(a, money);
 
   function viewAsSelect() {
     const sel = h("md-outlined-select", { quick: true, label: t("viewAs.label"), class: "view-as", dataset: { testid: "view-as" } },

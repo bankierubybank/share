@@ -91,13 +91,13 @@ export async function deletePushSubscription(db: D1Database, endpoint: string, i
 }
 
 /** Browsers of everyone linked to the trip except `except` (whoever made the change). */
-export async function pushTargets(db: D1Database, gid: string, except: string | null): Promise<PushRow[]> {
+export async function pushTargets(db: D1Database, gid: string, except: string | null, only?: string): Promise<PushRow[]> {
   const { results } = await db
     .prepare(
       `SELECT s.endpoint, s.identity, s.p256dh, s.auth, s.lang FROM push_subscriptions s
-       JOIN members m ON m.email = s.identity WHERE m.group_id = ? AND s.identity != ? LIMIT 200`,
+       JOIN members m ON m.email = s.identity WHERE m.group_id = ?1 AND s.identity != ?2 AND (?3 IS NULL OR s.identity = ?3) LIMIT 200`,
     )
-    .bind(gid, except ?? "")
+    .bind(gid, except ?? "", only ?? null)
     .all<PushRow>();
   return results;
 }

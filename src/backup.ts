@@ -4,9 +4,11 @@
 
 /** FK order: parents first, so a restore can insert in this order. */
 // push_subscriptions are left out on purpose: endpoints are capability URLs, and a browser re-subscribes anyway.
-export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups", "categories"] as const;
+export const BACKUP_TABLES = ["groups", "members", "bills", "bill_shares", "bill_payers", "activity", "recurrences", "bill_comments", "subgroups", "categories", "bill_templates"] as const;
 const PAGE = 1000;
 export const BACKUP_RETENTION_DAYS = 30;
+/** Pre-deploy exports (`predeploy/<YYYY-MM-DD>T<HHMM>-<sha>.sql`, written by deploy.yml): same 30 days, newest few always kept. */
+export const PREDEPLOY_KEEP = 3;
 
 export interface BackupFile {
   version: 1;
@@ -41,14 +43,22 @@ export async function runBackup(env: Env, now = new Date()): Promise<{ key: stri
   return { key, rows };
 }
 
-async function pruneBackups(env: Env, now: Date) {
-  const cutoff = new Date(now.getTime() - BACKUP_RETENTION_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const old: string[] = [];
+async function listKeys(env: Env, prefix: string) {
+  const keys: string[] = [];
   let cursor: string | undefined;
   do {
-    const page = await env.BACKUPS.list({ prefix: "backups/", cursor });
-    for (const o of page.objects) if (o.key.slice(8, 18) < cutoff) old.push(o.key);
+    const page = await env.BACKUPS.list({ prefix, cursor });
+    keys.push(...page.objects.map((o) => o.key));
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  if (old.length) await env.BACKUPS.delete(old);
+  return keys;
+}
+
+export async function pruneBackups(env: Env, now: Date) {
+  const cutoff = new Date(now.getTime() - BACKUP_RETENTION_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const old = (await listKeys(env, "backups/")).filter((k) => k.slice(8, 18) < cutoff);
+  // Keys sort by time (date first); the newest PREDEPLOY_KEEP stay even when a long quiet spell made them old.
+  const pre = (await listKeys(env, "predeploy/")).sort();
+  old.push(...pre.slice(0, Math.max(0, pre.length - PREDEPLOY_KEEP)).filter((k) => k.slice(10, 20) < cutoff));
+  for (let i = 0; i < old.length; i += 1000) await env.BACKUPS.delete(old.slice(i, i + 1000)); // delete() takes ≤ 1000 keys
 }

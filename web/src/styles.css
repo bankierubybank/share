@@ -512,6 +512,10 @@ md-list-item[data-testid="bill-item"] .bill-end .md-typescale-title-small { font
 .trip-net { white-space: nowrap; color: var(--md-sys-color-on-surface-variant); }
 .trip-net.pos { color: var(--positive); }
 .trip-net.neg { color: var(--negative); }
+.trip-pin.on { color: var(--md-sys-color-primary); }
+.trip-controls { align-items: center; margin-bottom: 8px; }
+.trip-controls md-outlined-select { min-width: 160px; }
+.scanq-row { align-items: center; min-height: 40px; }
 .spending { display: flex; flex-direction: column; gap: 4px; }
 .spend-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .spend-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; }

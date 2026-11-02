@@ -1,6 +1,6 @@
-import { api, ApiError, receiptUrl, type Bill, type BillCategory, type BillInput, type BillKind, type Comment, type CustomCategory, type Group, type Member, type ReceiptScan, type Split, type SplitMode, type Subgroup } from "../api";
+import { api, ApiError, receiptUrl, type Bill, type BillCategory, type BillTemplate, type BillInput, type BillKind, type Comment, type CustomCategory, type Group, type Member, type ReceiptScan, type Split, type SplitMode, type Subgroup } from "../api";
 import { clear, h, icon, snackbar } from "../dom";
-import { openDialog, type MdDialog } from "../dialogs";
+import { openDialog, promptDialog, type MdDialog } from "../dialogs";
 import { CURRENCIES, formatMoney, parseMoney, toInput } from "../money";
 import { CATEGORY_ORDER, categoryInfo } from "../categories";
 import { locale, t, tn } from "../i18n";
@@ -41,6 +41,21 @@ export interface BillDialogOptions {
   onDuplicate?: (bill: Bill) => void;
   /** The trip's own categories (v0.11). */
   categories?: CustomCategory[];
+  /** The trip's favourite bills (v0.12): one-tap chips on a new bill. */
+  templates?: BillTemplate[];
+  /** A favourite was picked on a new bill: the caller opens a new bill from it (`templateBill`). */
+  onTemplate?: (fav: BillTemplate) => void;
+  /** Favourites were added or removed here (the caller reloads its list). */
+  onTemplatesChanged?: () => void;
+  /** An already-scanned receipt (v0.12 multi-scan): prefill a new bill from it; the photo becomes its receipt. */
+  scanned?: { scan: ReceiptScan; image: Blob };
+}
+
+/** A favourite as a bill to prefill a new one from (the dialog's `template`). */
+export function templateBill(fav: BillTemplate): Bill {
+  return {
+    ...fav.bill!, id: "", date: "", shares: [], hasReceipt: false, recurrenceId: null, createdBy: null, createdAt: "", updatedAt: "", commentCount: 0,
+  };
 }
 
 export interface PendingSave {
@@ -542,42 +557,118 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
     }
   });
 
+  // ---------- favourites (v0.12, #4) ----------
+  let picked: BillTemplate | null = null;
+  function favChips() {
+    const favs = opts.templates ?? [];
+    if (bill || opts.draft || opts.template || opts.scanned || kind !== "expense" || group.archived || !favs.length) return null;
+    return h("div", { class: "stack-sm", dataset: { testid: "fav-chips" } },
+      h("span", { class: "md-typescale-title-small", id: "fav-label" }, t("fav.title")),
+      h("md-chip-set", { class: "chip-scroll", "aria-labelledby": "fav-label" }, favs.map(favChip)));
+  }
+  function favChip(f: BillTemplate): HTMLElement {
+    const chip = h("md-input-chip", {
+      label: f.name, dataset: { testid: "fav-chip", stale: f.bill ? "0" : "1" },
+      title: f.bill ? f.name : t("fav.stale"), "aria-label": f.bill ? f.name : `${f.name} — ${t("fav.stale")}`,
+      // The chip's remove button stops its own click, so this is only the chip itself.
+      onclick: () => {
+        if (!f.bill) return;
+        picked = f;
+        dialog.close("favourite");
+      },
+    });
+    chip.addEventListener("remove", (e) => {
+      e.preventDefault();
+      void removeFavourite(f, chip);
+    });
+    return chip;
+  }
+  /** Removed at once; Undo sits in place of the chip for a few seconds (the page's snackbar is behind this dialog). */
+  async function removeFavourite(f: BillTemplate, chip: HTMLElement) {
+    try {
+      await api.deleteTemplate(gid, f.id);
+    } catch (e) {
+      formError.textContent = e instanceof Error ? e.message : t("common.deleteFailed");
+      return;
+    }
+    opts.onTemplatesChanged?.();
+    if (!f.bill) return chip.remove();
+    const undo = h("md-assist-chip", { label: t("fav.undo", { name: f.name }), dataset: { testid: "fav-undo" }, onclick: async () => {
+      clearTimeout(timer);
+      const { paidBy, payers, fx, splitMode: _m, ...rest } = f.bill!;
+      try {
+        const { template } = await api.saveTemplate(gid, f.name, { ...rest, ...(fx ? { fx } : {}), ...(payers.length > 1 ? { payers } : { paidBy }) });
+        undo.replaceWith(favChip(template));
+        opts.onTemplatesChanged?.();
+      } catch (e) {
+        undo.remove();
+        formError.textContent = e instanceof Error ? e.message : t("common.saveFailed");
+      }
+    } }, icon("undo", "icon"));
+    chip.replaceWith(undo);
+    const timer = setTimeout(() => undo.remove(), 6000);
+  }
+  async function saveFavourite() {
+    const body = checkedBody();
+    if (!body) return;
+    const { date: _date, ...rest } = body;
+    await promptDialog(t("fav.saveTitle"), t("fav.name"), body.description.slice(0, 40), async (name) => {
+      try {
+        await api.saveTemplate(gid, name, rest);
+        snackbar(t("fav.saved", { name }));
+        opts.onTemplatesChanged?.();
+        return null;
+      } catch (e) {
+        return e instanceof ApiError ? e.message : t("common.saveFailed");
+      }
+    });
+  }
+
   // ---------- save / delete ----------
   // Recording a payment (Settle) is "Mark as paid" (#22): after paying by QR / bank, one tap records it.
   const saveBtn = h("md-filled-button", { onclick: () => save(), dataset: { testid: "bill-save" } },
     kind === "payment" && !bill ? t("bill.markPaid") : t("common.save")) as HTMLElement & { disabled: boolean };
 
-  async function save() {
+  /** The form as a bill body, or null (and the problem shown) when it isn't valid yet. */
+  function checkedBody(): BillInput | null {
     formError.textContent = "";
     description.error = amount.error = false;
     if (kind === "expense" && !description.value.trim()) {
       description.error = true;
       description.errorText = t("bill.whatRequired");
-      return description.focus();
+      description.focus();
+      return null;
     }
     if (kind === "payment" && paidBy.value === receiver.value) {
       formError.textContent = t("bill.sameFromTo");
-      return;
+      return null;
     }
     const p = kind === "payment" ? null : preview();
     if (p && !p.ok) {
       formError.textContent = p.error;
       if (p.error === t("bill.err.amount") && !amount.disabled) { amount.error = true; amount.errorText = p.error; amount.focus(); }
-      return;
+      return null;
     }
     const body = buildBody();
     if (kind === "payment" && !(body.amount! > 0)) {
       amount.error = true;
       amount.errorText = t("bill.err.amount");
-      return amount.focus();
+      amount.focus();
+      return null;
     }
     if (p?.ok && body.payers) {
       const sum = body.payers.reduce((a, x) => a + x.amount, 0);
       if (sum !== p.amount) {
         formError.textContent = t("bill.err.sumPayers", { sum: formatMoney(sum, currency), total: formatMoney(p.amount, currency) });
-        return;
+        return null;
       }
     }
+    return body;
+  }
+
+  async function save() {
+    const body = checkedBody();
+    if (!body) return;
     if (opts.onSaving && repeat === "none") return saveOptimistic(body);
     saveBtn.disabled = true;
     try {
@@ -758,6 +849,7 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
           qrBox, date, description, bill && commentsBox, formError)
       : h("div", { class: "stack" },
           !bill && !group.archived && h("div", { class: "row wrap tight-gap" }, scanInput, scanBtn),
+          favChips(),
           amount,
           h("div", { class: "row wrap tight-gap" }, fxChip),
           fxBox,
@@ -773,6 +865,8 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
           splitStatus,
           h("details", { class: "more" }, h("summary", { class: "md-typescale-title-small" }, t("bill.more")),
             h("div", { class: "stack" }, !bill && repeatSel, receiptBox,
+              !group.archived && h("div", { class: "row wrap" },
+                h("md-outlined-button", { type: "button", dataset: { testid: "fav-save" }, onclick: () => void saveFavourite() }, icon("star", "icon"), t("fav.save"))),
               bill && !group.archived && h("div", { class: "row wrap" },
                 h("md-outlined-button", { type: "button", dataset: { testid: "bill-duplicate" },
                   onclick: () => dialog.close("duplicate") }, icon("content_copy", "icon"), t("bill.duplicate")),
@@ -796,6 +890,10 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   // Payment layout places `paidBy` itself; renderPayers would move it into the (expense-only) payers box.
   if (kind === "expense") renderPayers();
   renderSplit();
+  if (opts.scanned && !bill) {
+    applyScan(opts.scanned.scan);
+    pendingReceipt = opts.scanned.image;
+  }
   renderReceipt();
   void loadComments();
   if (fxOn) prefillRate();
@@ -814,5 +912,6 @@ export async function openBillDialog(opts: BillDialogOptions): Promise<boolean> 
   }
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   if (closedWith === "duplicate" && bill) opts.onDuplicate?.(bill);
+  if (closedWith === "favourite" && picked) opts.onTemplate?.(picked);
   return changed;
 }

@@ -1,0 +1,19 @@
+# Weekly update PRs (docs/CI.md). Actions are pinned by commit SHA; Dependabot keeps the SHA + version comment current.
+# PRs run `ci` only (no secrets); nothing merges or deploys without the owner.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
