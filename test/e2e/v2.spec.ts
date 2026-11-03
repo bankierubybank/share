@@ -1,13 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { addEqualBill, createGroup, fill, field, openAddBill, pickOption, saveBill, showPanel, uniq } from "./helpers";
+import { addEqualBill, createGroup, field, fill, openAddBill, pickOption, saveBill, settleButton, showPanel, uniq } from "./helpers";
 
 // v0.2 features (#1–15, 17, 20, 21, 23). Runs on every project in playwright.config.ts.
 
 const settlementsText = async (page: Page) => {
   await showPanel(page, "summary");
-  return page.getByTestId("settlements").innerText();
+  return (await page.getByTestId("settlements").textContent()) ?? ""; // laptops hide my own pairs here (they are in the header)
 };
 
 async function openMenuItem(page: Page, testid: string) {
@@ -189,7 +189,7 @@ test("PromptPay QR when settling in THB (#13)", async ({ page }) => {
   await showPanel(page, "bills");
   await addEqualBill(page, "Hotel", "1000", "Ann");
   await showPanel(page, "summary");
-  await page.getByTestId("settle-btn").click();
+  await settleButton(page).click();
   const qr = page.getByTestId("qr-box");
   await expect(qr).toBeVisible();
   await expect(qr).toHaveAttribute("data-payload", /0066812345678.*5406500\.00/);

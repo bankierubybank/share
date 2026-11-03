@@ -12,6 +12,13 @@ async function fill(page: Page, testid: string, value: string) {
 
 /** FAB on phones, header button on laptops — both carry testid "add-bill"; click the visible one. */
 const addBillBtn = (page: Page) => page.getByTestId("add-bill").filter({ visible: true }).first();
+/** Phones show Add bill only on the Bills tab (v0.12.1). */
+async function clickAddBill(page: Page) {
+  if (!(await addBillBtn(page).isVisible())) await showPanel(page, "bills");
+  await addBillBtn(page).click();
+}
+/** The visible Settle for a payment: header or Summary list (each pair shows once, v0.12.1). */
+const settleButton = (page: Page) => page.locator("[data-testid=settle-btn]:visible, [data-testid=hero-settle]:visible").first();
 
 async function createGroup(page: Page, name: string, people: string[]) {
   await page.goto("/");
@@ -39,7 +46,7 @@ async function pickOption(page: Page, selectTestId: string, label: string) {
 }
 
 async function addEqualBill(page: Page, desc: string, amount: string, paidBy: string, exclude: string[] = []) {
-  await addBillBtn(page).click();
+  await clickAddBill(page);
   const dialog = page.getByTestId("bill-dialog");
   await expect(dialog).toHaveAttribute("data-ready", "1");
   await fill(page, "bill-description", desc);
@@ -82,7 +89,7 @@ test("equal split excluding someone; settle up to zero", async ({ page }) => {
   await expect(page.getByTestId("settlement")).toHaveCount(1);
   await expect(page.getByTestId("settlements")).toContainText("Ann pays Ben");
 
-  await page.getByTestId("settle-btn").click();
+  await settleButton(page).click();
   await expect(page.getByTestId("bill-dialog")).toBeVisible();
   await page.getByTestId("bill-save").click();
   await expect(page.getByTestId("all-settled")).toBeVisible();
@@ -90,7 +97,7 @@ test("equal split excluding someone; settle up to zero", async ({ page }) => {
 
 test("exact split validates the total", async ({ page }) => {
   await createGroup(page, `Exact ${uniq()}`, ["Ann", "Ben"]);
-  await addBillBtn(page).click();
+  await clickAddBill(page);
   await fill(page, "bill-description", "Groceries");
   await fill(page, "bill-amount", "100");
   await page.getByTestId("mode-exact").click();
@@ -179,7 +186,7 @@ test("layout fits the viewport (no horizontal scroll)", async ({ page }) => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow, `horizontal overflow on ${tab}`).toBeLessThanOrEqual(1);
   }
-  await addBillBtn(page).click();
+  await clickAddBill(page);
   const inner = page.getByTestId("bill-dialog").locator("dialog");
   await expect(inner).toBeVisible();
   const box = await inner.boundingBox();
@@ -191,7 +198,7 @@ test("payments don't inflate Paid/Share; balance rows fit", async ({ page }) => 
   await createGroup(page, `Pay ${uniq()}`, ["Ann", "Ben"]);
   await addEqualBill(page, "Hotel", "100", "Ann");
   await showPanel(page, "summary");
-  await page.getByTestId("settle-btn").click();
+  await settleButton(page).click();
   await page.getByTestId("bill-save").click();
   await expect(page.getByTestId("all-settled")).toBeVisible();
   const rows = page.getByTestId("balance-row");

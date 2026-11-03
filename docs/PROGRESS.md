@@ -1,11 +1,11 @@
 # Progress
 
-_Last updated: 2026-11-02_
+_Last updated: 2026-11-03_
 
-## Status: v0.12.0 (favourites, leave trip, multi-scan, home search) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 1577d070)
+## Status: v0.12.1 (UI/UX review fixes) live at https://share.bankierubybank.workers.dev (behind Cloudflare Access, version 42333eb6)
 
-Local 2026-10-30 (0.12.0): unit 207, integration 218, system 36, security 122 (+2 prod-only), E2E 378 (+2 Chromium-only skips) on 4 browsers, rate limit 1 — green after targeted reruns of environmental timeouts (ISSUES #61).
-Prod 2026-10-30 (1577d070): system 36, security 115 (+9 local-only), E2E 172 (+18 local-only; Chromium + iPhone), rate limit 1 — green. (First 0.12 deploy f8080456 failed one prod E2E: ISSUES #60, fixed forward.)
+Local 2026-11-03 (0.12.1): unit 207, integration 218, system 36, security 122 (+2 prod-only), E2E 395 (+1 Chromium-only skip) on 4 browsers, rate limit 1 — green (mobile-safari re-run on its own after a mid-gate WebKit stall, ISSUES #61).
+Prod 2026-11-03 (42333eb6): system 36, security 115 (+9 local-only), E2E 178 (+18 local-only; Chromium + iPhone), rate limit — green except 2 Chromium timeouts in the full run (v11 offline edit, v12-ux 320 px); both re-run green against prod 4/4 each.
 
 | Area | State |
 |------|-------|
@@ -160,6 +160,24 @@ Prod 2026-10-30 (1577d070): system 36, security 115 (+9 local-only), E2E 172 (+1
 | 22 | Prune predeploy backups + activity retention | ✅ 30 days (newest 3 kept) / 2 years |
 | 23 | Atomic merge | ✅ one batch, independent of the bill count |
 | 24 | Split group.ts | ✅ 1630 → 1365 lines; settings lazy |
+
+## v0.12.1 status (UI/UX review)
+
+| # | Item | State |
+|---|------|-------|
+| 1 | Per-day chart upside down | ✅ |
+| 2 | Sideways scrolling on narrow phones | ✅ (320 / 390 px checked by E2E) |
+| 3 | Add bill covered Settle / edit buttons | ✅ Bills tab only on phones |
+| 5 | Home names squeezed by the balance | ✅ balance under the name |
+| 6 | Copy from before private trips | ✅ |
+| 7 | Phone header too tall on every tab | ✅ 2 + "more" on Bills; short header elsewhere |
+| 8 | "Who pays whom" twice | ✅ |
+| 13 | "Spent" meant "paid" | ✅ |
+
+Review leftovers (not picked): bill-dialog split chip scrolled out of view (4), two per-day numbers + truncated
+biggest bill (9), Settings as one long dialog (10), short laptop bill dialog (11), sort as an icon (12),
+"group" vs "trip" wording (14), names instead of emails in history (15), bell label (16), avatar colours (17),
+confirm on the join page (18), empty-trip double message (19), year in bill dates (20), notifications help (21).
 
 ## Next ideas (backlog)
 - Not picked yet: live FX rates, trip kitty (shared cash pot), copy trip, import Splitwise/KittySplit CSV, weekly

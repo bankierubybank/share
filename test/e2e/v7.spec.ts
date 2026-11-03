@@ -17,7 +17,8 @@ test("trip header: what I get back / owe, with Settle, on every tab", async ({ p
     await expect(page.getByTestId("my-net")).toBeVisible();
   }
 
-  // Settle from the header records the payment and clears the position.
+  // Settle from the header (phones: on the Bills tab) records the payment and clears the position.
+  await showPanel(page, "bills");
   await page.getByTestId("hero-settle").click();
   await expect(page.getByTestId("bill-dialog")).toHaveAttribute("data-ready", "1");
   await saveBill(page);

@@ -154,7 +154,7 @@ export function renderHome(root: HTMLElement) {
     const p = lastOverview?.trips.find((x) => x.groupId === g.id);
     if (!p || !p.bills) return null;
     const amount = formatMoney(Math.abs(p.net), g.currency);
-    return h("div", { slot: "end", class: `trip-net md-typescale-label-large tabular ${p.net > 0 ? "pos" : p.net < 0 ? "neg" : ""}`, dataset: { testid: "trip-net" } },
+    return h("div", { class: `trip-net md-typescale-label-large tabular ${p.net > 0 ? "pos" : p.net < 0 ? "neg" : ""}`, dataset: { testid: "trip-net" } },
       p.net > 0 ? t("home.netGet", { amount }) : p.net < 0 ? t("home.netOwe", { amount }) : t("home.netSettled"));
   };
 
@@ -227,9 +227,8 @@ export function renderHome(root: HTMLElement) {
           "md-list-item",
           { type: "link", href: `/g/${g.id}`, dataset: { testid: g.local ? "trip-local" : lastMine ? "trip-mine" : "trip" }, onclick: (e: Event) => { e.preventDefault(); navigate(`/g/${g.id}`); } },
           h("div", { slot: "headline" }, g.name),
-          h("div", { slot: "supporting-text" }, line(g)),
+          h("div", { slot: "supporting-text" }, h("div", null, line(g)), !g.local && position(g)),
           icon(g.archived ? "archive" : "groups", "start"),
-          !g.local && position(g),
           // Server trips can't be hidden from the list (you're in them); this-device entries can.
           g.local && h(
             "md-icon-button",

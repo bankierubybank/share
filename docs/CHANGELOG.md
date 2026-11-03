@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.1 — 2026-11-02
+
+UI/UX review (35 screens: phone, laptop, dark, Thai, 320 px). Owner picks: 1, 2, 3, 5, 6, 7, 8, 13.
+
+- **Spending per day stands upright** (#1): its bars hung from the top — the chart reused the class names of the
+  older trip-stats chart, whose column layout won. Own class names now (`.perday-*`).
+- **No sideways scrolling on narrow phones** (#2): the header's lines were `nowrap` ("No bills yet — add the first
+  one", "You paid ฿123,456,789.00 · …", big balances at 320 px), and home's one-column grid grew to its widest row.
+  Lines wrap; long amounts break; the reminder bell hides under 360 px.
+- **Each payment shows once** (#7, #8): phones' Bills tab shows your first two next steps in the header plus
+  "N more in Summary"; Summary lists them itself (the header keeps only where you stand); People and Activity get
+  the short header (who + your balance), so their content starts on the first screen. On laptops the header shows
+  yours and "Who pays whom" lists only the others ("Yours are at the top").
+- **Add bill only on the Bills tab on phones** (#3): the floating button covered Settle (Summary) and the edit
+  buttons (People). Keyboard N still works everywhere.
+- **Home**: a trip's balance sits under its name (#5) — names no longer wrap onto three lines on phones.
+- **Wording** (#6, #13): "You paid … · your share …" (was "Spent … · share of bills …"); copy from before trips
+  were private — read-only banner, "How it works", link-copied toast, tips — now points to invite links.
+
 ## 0.12.0 — 2026-10-30
 
 Owner picks: #4, #6, #7, #10, #12, #21, #22, #23, #24.

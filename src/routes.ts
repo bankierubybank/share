@@ -23,7 +23,7 @@ export type AppEnv = { Bindings: Env; Variables: { identity: string | null } };
 export type GroupEnv = { Bindings: Env; Variables: { identity: string | null; group: db.Group; me: string | null } };
 type GCtx = Context<GroupEnv>;
 
-export const VERSION = "0.12.0";
+export const VERSION = "0.12.1";
 export const RECEIPT_MAX = 2 * 1024 * 1024;
 const PURGE_DAYS = 30;
 /** Days a deleted trip stays in the bin (v0.10). */

@@ -196,7 +196,7 @@ md-list { background: transparent; --md-list-container-color: transparent; }
 
 /* ---------- Home ---------- */
 .hero { padding: 24px 4px 24px; display: flex; flex-direction: column; gap: 8px; }
-.home-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+.home-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 840px) {
   .home-grid { grid-template-columns: 3fr 2fr; align-items: start; }
   .hero { padding: 48px 4px 32px; }
@@ -546,12 +546,12 @@ kbd { display: inline-block; min-width: 1.6em; padding: 2px 6px; border-radius: 
 
 .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; }
 .budget-pace { opacity: 0.85; }
-.day-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding: 8px 16px 0; }
-.day-col { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; min-width: 3px; border-radius: 3px 3px 0 0; }
-.day-fill { width: 100%; border-radius: 3px 3px 0 0; background: var(--md-sys-color-primary); }
-.day-col.today .day-fill { background: var(--md-sys-color-tertiary, #4a6267); }
-.day-col:hover .day-fill { opacity: 0.8; }
-.day-axis { display: flex; justify-content: space-between; padding: 4px 16px 12px; }
+.perday-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding: 8px 16px 0; }
+.perday-col { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; min-width: 3px; border-radius: 3px 3px 0 0; }
+.perday-fill { width: 100%; border-radius: 3px 3px 0 0; background: var(--md-sys-color-primary); }
+.perday-col.today .perday-fill { background: var(--md-sys-color-tertiary, #4a6267); }
+.perday-col:hover .perday-fill { opacity: 0.8; }
+.perday-axis { display: flex; justify-content: space-between; padding: 4px 16px 12px; }
 
 /* ---------- v0.10 ---------- */
 .signed-out { position: fixed; inset: 0 0 auto 0; z-index: 30; display: flex; align-items: center; gap: 12px;
@@ -560,3 +560,31 @@ kbd { display: inline-block; min-width: 1.6em; padding: 2px 6px; border-radius: 
 .stack-xs { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 /* Comment deleted, with Undo (#12). */
 .comment-gone { align-items: center; }
+
+/* ---------- v0.12.1 UI review ---------- */
+/* Headlines wrap on narrow phones (tabular = nowrap made the page scroll sideways). */
+.trip-hero :is(.hero-net, .hero-sub) { white-space: normal; }
+.hero-actions li .grow { min-width: 0; overflow-wrap: anywhere; }
+.trip-net { margin-top: 2px; white-space: normal; }
+.yours-above { display: none; margin: 0; padding: 0 20px 12px; }
+/* Add bill lives on the Bills tab; elsewhere it covered Settle / edit buttons. Room under the last row for it. */
+.group-layout:not([data-tab="bills"]) ~ .fab { display: none; }
+@media (max-width: 959px) {
+  .group-layout[data-tab="bills"] { padding-bottom: 88px; }
+  .hero-actions li.extra { display: none; }
+  /* Summary lists every payment itself; People / Activity get the short header (who + where you stand). */
+  .group-layout[data-tab="summary"] .trip-hero .hero-actions { display: none; }
+  .group-layout:is([data-tab="members"], [data-tab="activity"]) .trip-hero :is(.hero-actions, .hero-sub, .budget) { display: none; }
+}
+@media (min-width: 960px) {
+  .hero-actions li.more { display: none; }
+  md-list-item[data-testid="settlement"].mine { display: none; }
+  .yours-above { display: block; }
+}
+@media (max-width: 359px) {
+  .hero-actions [data-testid="hero-remind"] { display: none; }
+  .trip-hero .hero-net { font-size: 1.5rem; line-height: 2rem; }
+}
+.hero-actions li.more { background: none; min-height: 0; padding: 0 0 0 4px; }
+.trip-controls md-outlined-text-field { min-width: 0; flex: 1 1 160px; }
+.trip-controls md-outlined-select { min-width: 0; flex: 1 1 200px; }

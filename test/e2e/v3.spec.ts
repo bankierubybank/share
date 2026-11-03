@@ -1,6 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import { contextAs, expect, test } from "./fixtures";
-import { addEqualBill, createGroup, fill, field, openAddBill, saveBill, showPanel, uniq } from "./helpers";
+import { addEqualBill, createGroup, field, fill, openAddBill, saveBill, settleButton, showPanel, uniq } from "./helpers";
 
 // v0.3 features (#4, 6, 8, 10, 11, 12, 16, 17, 18).
 
@@ -73,7 +73,7 @@ test("partial settle-up + history (#8)", async ({ page }) => {
   await createGroup(page, `Part ${uniq()}`, ["Ann", "Ben"]);
   await addEqualBill(page, "Hotel", "1000", "Ann");
   await showPanel(page, "summary");
-  await page.getByTestId("settle-btn").click();
+  await settleButton(page).click();
   await expect(page.getByTestId("bill-dialog")).toHaveAttribute("data-ready", "1");
   await page.getByTestId("pay-half").click();
   await expect(field(page, "bill-amount")).toHaveValue("250.00");

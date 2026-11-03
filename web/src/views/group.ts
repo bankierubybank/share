@@ -738,13 +738,13 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     return h("section", { class: "card flush", "aria-labelledby": "day-chart-title" },
       h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "day-chart-title" }, t("chart.perDay")),
         h("span", { class: "md-typescale-body-medium muted tabular", dataset: { testid: "day-avg" } }, t("chart.avgDay", { amount: money(Math.round(total / shown.length)) }))),
-      h("div", { class: "day-chart", role: "list", dataset: { testid: "day-chart" } },
+      h("div", { class: "perday-chart", role: "list", dataset: { testid: "day-chart" } },
         shown.map((d) => {
           const v = sums.get(d) ?? 0;
-          return h("div", { class: `day-col ${d === today ? "today" : ""}`, role: "listitem", title: `${label(d)}: ${money(v)}`, "aria-label": `${label(d)}: ${money(v)}`, dataset: { testid: "day-bar" } },
-            h("div", { class: "day-fill", style: `height:${v ? Math.max(3, (v / max) * 100) : 0}%` }));
+          return h("div", { class: `perday-col ${d === today ? "today" : ""}`, role: "listitem", title: `${label(d)}: ${money(v)}`, "aria-label": `${label(d)}: ${money(v)}`, dataset: { testid: "day-bar" } },
+            h("div", { class: "perday-fill", style: `height:${v ? Math.max(3, (v / max) * 100) : 0}%` }));
         })),
-      h("div", { class: "day-axis md-typescale-body-small muted", "aria-hidden": "true" },
+      h("div", { class: "perday-axis md-typescale-body-small muted", "aria-hidden": "true" },
         h("span", null, label(shown[0])), h("span", null, label(shown[shown.length - 1]))));
   }
 
@@ -781,13 +781,14 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
     const net = bal && (you
       ? bal.net > 0 ? t("hero.youGet", { amount: money(bal.net) }) : bal.net < 0 ? t("hero.youOwe", { amount: money(-bal.net) }) : t("hero.youSettled")
       : bal.net > 0 ? t("mycard.getsBack", { amount: money(bal.net) }) : bal.net < 0 ? t("mycard.owes", { amount: money(-bal.net) }) : t("mycard.settled"));
-    const actions = who ? summary.settlements.filter((s) => s.from === who || s.to === who).map((s) => {
+    const actions = who ? summary.settlements.filter((s) => s.from === who || s.to === who).map((s, i) => {
       const out = s.from === who;
       const text = out
         ? t("mycard.pay", { name: memberName(s.to), amount: money(s.amount) })
         : you ? t("mycard.paysYou", { name: memberName(s.from), amount: money(s.amount) })
           : t("mycard.paysThem", { from: memberName(s.from), name, amount: money(s.amount) });
-      return h("li", { class: out ? "out" : "in", dataset: { testid: "hero-action" } },
+      // Phones show the first two (the rest: "N more" → Summary); laptops show all (v0.12.1).
+      return h("li", { class: `${out ? "out" : "in"} ${i >= 2 ? "extra" : ""}`, dataset: { testid: "hero-action" } },
         icon(out ? "arrow_forward" : "payments"),
         h("span", { class: "grow md-typescale-body-large" }, text),
         !out && !isView && remindButton(s, "hero-remind"),
@@ -800,9 +801,12 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         state.members.length > 1 && viewAsSelect()),
       bal
         ? h("p", { class: "hero-net md-typescale-headline-medium tabular", dataset: { testid: "my-net" } }, net)
-        : h("p", { class: "hero-net md-typescale-headline-medium tabular" }, state.bills.length ? money(summary.total) : t("hero.nothingYet")),
-      bal && h("p", { class: "md-typescale-body-medium hero-sub tabular" }, t("mycard.spent", { paid: money(bal.paid), owed: money(bal.owed) })),
-      actions.length > 0 && h("ul", { class: "hero-actions", "aria-label": t("summary.whoPays") }, actions),
+        : h("p", { class: `hero-net md-typescale-headline-medium ${state.bills.length ? "tabular" : ""}` }, state.bills.length ? money(summary.total) : t("hero.nothingYet")),
+      bal && h("p", { class: "md-typescale-body-medium hero-sub tabular" }, t(you ? "hero.youPaid" : "mycard.spent", { paid: money(bal.paid), owed: money(bal.owed) })),
+      actions.length > 0 && h("ul", { class: "hero-actions", "aria-label": t("summary.whoPays") }, actions,
+        actions.length > 2 && h("li", { class: "more" },
+          h("md-text-button", { dataset: { testid: "hero-more" }, onclick: () => { showTab("summary"); window.scrollTo(0, 0); } },
+            tn("hero.more", actions.length - 2)))),
       h("p", { class: "md-typescale-body-medium hero-sub hero-stats" },
         bal && h("span", { class: "tabular" }, `${t("hero.trip")} ${money(summary.total)} · `),
         t("hero.stats", { bills: tn("billCount", state.bills.length), people: tn("people", state.members.length) }),
@@ -840,13 +844,18 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         h("div", { class: "budget-fill", style: `width:${Math.min(100, bt.used * 100)}%` })));
   }
 
+  /** Whose position the header shows ("View as" person, else me). */
+  const heroWho = () => (state.bills.length ? viewAs ?? state.me : null);
+
   function summaryPanel() {
     const { summary } = state;
     const settlements = summary.settlements.length
       ? h("md-list", { dataset: { testid: "settlements" }, "aria-label": t("summary.whoPays") },
           summary.settlements.map((s) => {
             const dim = viewAs && s.from !== viewAs && s.to !== viewAs;
-            return h("md-list-item", { class: dim ? "dim" : "", dataset: { testid: "settlement" } },
+            // In the header too (whose position it shows): hidden here on laptops, where both are on screen (v0.12.1).
+            const mine = !!heroWho() && (s.from === heroWho() || s.to === heroWho());
+            return h("md-list-item", { class: `${dim ? "dim" : ""} ${mine ? "mine" : ""}`, dataset: { testid: "settlement" } },
               h("div", { slot: "headline" }, h("strong", null, memberName(s.from)), t("summary.paysInfix"), h("strong", null, memberName(s.to))),
               h("div", { slot: "supporting-text", class: "md-typescale-title-medium amount-owed tabular" }, money(s.amount)),
               h("div", { slot: "end", class: "row settle-actions" },
@@ -875,6 +884,9 @@ export async function renderGroup(root: HTMLElement, gid: string, mode: "edit" |
         h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "pays-title" }, t("summary.whoPays")),
           !isView && summary.settlements.length > 1 && h("md-text-button", { onclick: () => void remindEveryone(), dataset: { testid: "remind-all" } },
             icon("share", "icon"), t("remind.all"))),
+        summary.settlements.some((s) => s.from === heroWho() || s.to === heroWho()) &&
+          h("p", { class: "yours-above md-typescale-body-medium muted", dataset: { testid: "yours-above" } },
+            summary.settlements.every((s) => s.from === heroWho() || s.to === heroWho()) ? t("summary.allAbove") : t("summary.yoursAbove")),
         settlements),
       h("section", { class: "card flush", "aria-labelledby": "bal-title" }, h("div", { class: "card-head" }, h("h2", { class: "md-typescale-title-medium", id: "bal-title" }, t("summary.balances"))), balances),
       categoryChart(),

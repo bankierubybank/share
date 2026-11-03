@@ -26,6 +26,13 @@ export async function createGroup(page: Page, name: string, people: string[], cu
   return page.url().split("/g/")[1];
 }
 
+/**
+ * The visible Settle button for a payment: in the header (phones' Bills tab; laptops for my own payments) or in
+ * Summary's "Who pays whom" (phones' Summary tab; laptops for other people's) — v0.12.1 shows each pair once.
+ */
+export const settleButton = (page: Page) =>
+  page.locator("[data-testid=settle-btn]:visible, [data-testid=hero-settle]:visible").first();
+
 /** On phones panels are tabs; on laptops all panels are visible. */
 export async function showPanel(page: Page, tab: "bills" | "summary" | "members" | "activity") {
   const t = page.getByTestId(`tab-${tab}`);
@@ -39,6 +46,8 @@ export async function pickOption(page: Page, selectTestId: string, label: string
 }
 
 export async function openAddBill(page: Page) {
+  // Phones show Add bill only on the Bills tab (v0.12.1).
+  if (!(await addBillBtn(page).isVisible())) await showPanel(page, "bills");
   await addBillBtn(page).click();
   await expect(page.getByTestId("bill-dialog")).toHaveAttribute("data-ready", "1");
 }
