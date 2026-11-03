@@ -25,12 +25,12 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
-    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/vitest-plugin": "^1.4.11",
     "@cloudflare/workers-types": "^5.20261022.1",
     "@playwright/test": "^1.64.1",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/qrcode": "^1.5.6",
-    "dotenv": "^18.0.8",
+    "dotenv": "^18.0.9",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^4.1.12",
@@ -38,10 +38,10 @@
   },
   "dependencies": {
     "@fontsource/roboto": "^5.3.0",
-    "@material-symbols/svg-400": "^0.48.1",
+    "@material-symbols/svg-400": "^0.48.2",
     "@material/web": "^2.5.0",
-    "hono": "^4.13.13",
-    "jose": "^6.2.13",
+    "hono": "^4.13.14",
+    "jose": "^6.2.14",
     "qrcode": "^1.5.4"
   },
   "allowScripts": {
